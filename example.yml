@@ -1,0 +1,66 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: 
+      - main
+      - feature/**
+      - task/**
+      - ci
+  workflow_dispatch:
+    inputs:
+      should_create_release:
+        required: false
+        description: 'create release: true | false'
+        default: 'false'
+      environment:
+        description: "Environment to deploy (test | staging | prod)"
+        required: false
+        default: "test"
+      components:
+        description: "Comma-separated list of components (e.g. api, grpc)"
+        required: false
+        default: "api,grpc"
+      project_name:
+        description: "Name of the project"
+        required: false
+        default: "myproject"
+      namespace:
+        description: "Kubernetes namespace for deployment"
+        required: false
+        default: "mynamespace"
+      secret_store_name:
+        description: "Name of the external secret store"
+        required: false
+        default: "my-secret-store"
+      registry_host:
+        description: "Registry hostname"
+        required: false
+        default: "sandbox.vps.blincpay.io"
+
+jobs:
+  build:
+    uses: your-org/your-public-template-repo/.github/workflows/build.yml@main
+    with:
+      project_name: ${{ github.event.inputs.project_name || vars.PROJECT_NAME }}
+      components_to_build: ${{ github.event.inputs.components || vars.COMPONENTS_TO_BUILD }}
+      registry_host: ${{ github.event.inputs.registry_host }}
+      create_release: ${{ github.event.inputs.should_create_release }}
+    secrets:
+      registry_username: ${{ secrets.REGISTRY_USERNAME }}
+      registry_password: ${{ secrets.REGISTRY_PASSWORD }}
+
+  deploy:
+    needs: build
+    if: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/feature/'))) || (github.event_name == 'workflow_dispatch' && github.event.inputs.should_create_release == 'true') }}
+    uses: your-org/your-public-template-repo/.github/workflows/release.yml@main
+    with:
+      environment: ${{ github.event.inputs.environment || 'test' }}
+      components: ${{ github.event.inputs.components || vars.COMPONENTS_TO_BUILD }}
+      run_id: ${{ github.run_id }}
+      project_name: ${{ github.event.inputs.project_name || vars.PROJECT_NAME }}
+      namespace: ${{ github.event.inputs.namespace }}
+      secret_store_name: ${{ github.event.inputs.secret_store_name }}
+    secrets:
+      gh_actions_token: ${{ secrets.GITHUB_TOKEN }}
+      gh_gitops_token: ${{ secrets.GH_GITOPS_PAT }}

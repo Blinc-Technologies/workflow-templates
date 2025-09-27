@@ -1,0 +1,103 @@
+name: Build and Release
+
+on:
+  workflow_call:
+    inputs:
+      project_name:
+        description: "Name of the project (used in image repo naming)"
+        required: true
+        type: string
+      components_to_build:
+        description: "Comma-separated list of components to build (e.g. api,worker)"
+        required: true
+        type: string
+      registry_host:
+        description: "Registry hostname"
+        required: true
+        type: string
+      create_release:
+        description: "Force release even on workflow_dispatch"
+        required: false
+        default: "false"
+        type: string
+    secrets:
+      registry_username:
+        description: "Registry username"
+        required: true
+      registry_password:
+        description: "Registry password or token"
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY_HOST: ${{ inputs.registry_host }}
+      PROJECT_NAME: ${{ inputs.project_name }}
+      COMPONENTS_TO_BUILD: ${{ inputs.components_to_build }}
+      SHOULD_CREATE_RELEASE_INPUT: ${{ inputs.create_release }}
+      EVENT_NAME: ${{ github.event_name }}
+      REF: ${{ github.ref }}
+      BRANCH_NAME: ${{ github.ref_name }}
+      COMMIT_SHA: ${{ github.sha }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set SHOULD_CREATE_RELEASE based on trigger and branch
+        id: set_should_create_release
+        run: |
+          if [[ "$EVENT_NAME" == "push" && ( "$REF" == "refs/heads/main" || "$REF" == refs/heads/feature/* ) ]]; then
+            echo "should_create_release=true" >> $GITHUB_OUTPUT
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" && "$SHOULD_CREATE_RELEASE_INPUT" == "true" ]]; then
+            echo "should_create_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_create_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ inputs.registry_host }}
+          username: ${{ secrets.registry_username }}
+          password: ${{ secrets.registry_password }}
+
+      - name: Build and Push
+        id: build_and_push
+        run: |
+          mkdir -p releases
+          COMPONENTS=""
+          SHOULD_CREATE_RELEASE=${{ steps.set_should_create_release.outputs.should_create_release }}
+          for dir in $(find src -maxdepth 1 -mindepth 1 -type d); do
+            COMPONENT=$(basename "$dir" | sed 's/.*\.//' | tr '[:upper:]' '[:lower:]')
+            if [[ -f "$dir/Dockerfile" && "$COMPONENTS_TO_BUILD" == *"$COMPONENT"* ]]; then
+              COMPONENTS="$COMPONENTS,$COMPONENT"
+              IMAGE=$REGISTRY_HOST/${PROJECT_NAME}_$COMPONENT:$COMMIT_SHA
+              echo "🔨 Building and pushing $IMAGE..."
+              docker build -t $IMAGE -f $dir/Dockerfile .
+              if [[ "${SHOULD_CREATE_RELEASE:-false}" == "true" ]]; then
+                docker push $IMAGE
+                echo "📝 Writing metadata for $COMPONENT..."
+                jq --null-input \
+                  --arg component "$COMPONENT" \
+                  --arg branch "$BRANCH_NAME" \
+                  --arg commit "$COMMIT_SHA" \
+                  --arg tag "$COMMIT_SHA" \
+                  --arg repository "$REGISTRY_HOST/${PROJECT_NAME}_$COMPONENT" \
+                  --arg timestamp "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+                  '{"component":$component,"branch":$branch,"commit":$commit,"tag":$tag,"repository":$repository,"timestamp":$timestamp}' \
+                  > releases/$COMPONENT.json
+              fi
+            fi
+          done
+
+      - name: Upload Artifacts
+        if: ${{ steps.set_should_create_release.outputs.should_create_release == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: releases/
