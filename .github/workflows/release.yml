@@ -50,14 +50,14 @@ jobs:
       ENVIRONMENT: ${{ inputs.environment }}
       COMPONENTS: ${{ inputs.components }}
       RUN_ID: ${{ inputs.run_id }}
-    
+      github_token: ${{ secrets.GITHUB_TOKEN }}    
     steps:
     - name: Debug artifact list
       run: |
         gh run view ${{ inputs.run_id }} --repo ${{ github.repository }} --json artifacts --jq '.artifacts[].name'
       env:
         GH_TOKEN: ${{ secrets.GH_ACTIONS_TOKEN }}
-        
+
     - name: Download Artifacts
       uses: actions/download-artifact@v4
       with:
