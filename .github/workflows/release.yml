@@ -55,7 +55,7 @@ jobs:
     - name: Download Artifacts
       uses: actions/download-artifact@v4
       with:
-        github-token: ${{ secrets.gh_actions_token || secrets.GITHUB_TOKEN }}
+        github-token: ${{ secrets.GH_ACTIONS_TOKEN }}
         run-id: ${{ inputs.run_id }}
         name: release-artifacts
         path: releases/
