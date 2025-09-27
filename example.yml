@@ -42,13 +42,9 @@ jobs:
   build:
     uses: your-org/your-public-template-repo/.github/workflows/build.yml@main
     with:
-      project_name: ${{ github.event.inputs.project_name || vars.PROJECT_NAME }}
-      components_to_build: ${{ github.event.inputs.components || vars.COMPONENTS_TO_BUILD }}
-      registry_host: ${{ github.event.inputs.registry_host }}
+      project_name: ${{ vars.PROJECT_NAME }}
+      components_to_build: ${{ vars.COMPONENTS_TO_BUILD }}
       create_release: ${{ github.event.inputs.should_create_release }}
-    secrets:
-      registry_username: ${{ secrets.REGISTRY_USERNAME }}
-      registry_password: ${{ secrets.REGISTRY_PASSWORD }}
 
   deploy:
     needs: build
