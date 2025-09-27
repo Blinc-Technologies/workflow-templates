@@ -42,9 +42,8 @@ jobs:
     environment: ${{ inputs.environment }}
     env:
       # TODO: Configure this to your organization's GitOps repository
-      GITOPS_REPO: your-org/your-gitops-repo
-      GITOPS_REPO_PATH: gitops
-      APPLICATION_REPO_PATH: application
+      GITOPS_REPO: Blinc-Technologies/blinc-gitops
+      GITOPS_REPO_PATH: blinc-gitops
       PROJECT_NAME: ${{ inputs.project_name }}
       NAMESPACE: ${{ inputs.namespace }}
       SECRET_STORE_NAME: ${{ inputs.secret_store_name }}
@@ -116,12 +115,6 @@ jobs:
             echo "✅ Commit $COMMIT_HASH is tagged. OK to deploy."
           fi
         done
-
-    - name: Checkout Application repo
-      uses: actions/checkout@v4
-      with:
-        repository: ${{ github.repository }}
-        path: ${{ env.APPLICATION_REPO_PATH }}
 
     - name: Checkout GitOps repo
       uses: actions/checkout@v4
