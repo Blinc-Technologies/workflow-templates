@@ -1,4 +1,4 @@
-name: Build and Release
+name: Build
 
 on:
   workflow_call:
@@ -28,7 +28,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      REGISTRY_HOST: sandbox.vps.blincpay.io
+      REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}
       PROJECT_NAME: ${{ inputs.project_name }}
       COMPONENTS_TO_BUILD: ${{ inputs.components_to_build }}
       SHOULD_CREATE_RELEASE_INPUT: ${{ inputs.create_release }}
