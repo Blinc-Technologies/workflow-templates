@@ -56,7 +56,7 @@ jobs:
       run: |
         gh run view ${{ inputs.run_id }} --repo ${{ github.repository }} --json artifacts --jq '.artifacts[].name'
       env:
-        GH_TOKEN: ${{ secrets.GH_ACTIONS_TOKEN }}
+        GH_TOKEN: ${{ github.token }}
 
     - name: Download Artifacts
       uses: actions/download-artifact@v4
