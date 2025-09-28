@@ -28,13 +28,6 @@ on:
         description: 'Name of the external secret store'
         required: true
         type: string
-    secrets:
-      gh_actions_token:
-        description: 'GitHub token for downloading artifacts (defaults to GITHUB_TOKEN)'
-        required: false
-      gh_gitops_token:
-        description: 'GitHub token for GitOps repository access (defaults to GH_GITOPS_PAT)'
-        required: false
 
 jobs:
   release:
@@ -56,7 +49,7 @@ jobs:
       run: |
         gh run view ${{ inputs.run_id }} --repo ${{ github.repository }} --json artifacts --jq '.artifacts[].name'
       env:
-        GH_TOKEN: ${{ github.token }}
+        GH_TOKEN: ${{ secrets.GH_ACTIONS_TOKEN }}
 
     - name: Download Artifacts
       uses: actions/download-artifact@v4
@@ -65,9 +58,22 @@ jobs:
         run-id: ${{ inputs.run_id }}
         name: release-artifacts
         path: releases/
+      continue-on-error: true
+      id: download-artifacts
     
     - name: Verify release metadata
       run: |
+        # Check if artifact download failed
+        if [[ "${{ steps.download-artifacts.outcome }}" != "success" ]]; then
+          echo "❌ Failed to download artifacts from run ID: ${{ inputs.run_id }}"
+          echo "   This could be due to:"
+          echo "   1. Invalid run ID"
+          echo "   2. Insufficient permissions to access the run"
+          echo "   3. The run doesn't exist or artifacts have expired"
+          echo "   4. The build workflow didn't generate artifacts (should_deploy=false)"
+          exit 1
+        fi
+        
         # Look for any JSON files under releases/
         if ! ls releases/*.json >/dev/null 2>&1; then
           echo "❌ No release metadata found in the downloaded artifact."
