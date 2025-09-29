@@ -1,55 +1,46 @@
-name: Build and Deploy
+# File: .github/workflows/release.yml
+# This goes in ANY repository that wants to use the reusable release workflow
+# Example: blinc-payment-service, blinc-notification-service, etc.
+
+name: Release
 
 on:
-  push:
-    branches: 
-      - main
-      - feature/**
-      - task/**
-      - ci
+  workflow_run:
+    workflows: ["Build"] 
+    types: [completed]
   workflow_dispatch:
     inputs:
-      should_create_release:
-        required: false
-        description: 'create release: true | false'
-        default: 'false'
       environment:
-        description: "Environment to deploy (test | staging | prod)"
-        required: false
-        default: "test"
+        required: true
+        description: 'test | staging | prod'
+        default: 'test'
+        type: choice
+        options:
+          - test
+          - staging
+          - prod
       components:
-        description: "Comma-separated list of components (e.g. api, grpc)"
-        required: false
-        default: "api,grpc"
-      project_name:
-        description: "Name of the project"
-        required: false
-        default: "myproject"
-      namespace:
-        description: "Kubernetes namespace for deployment"
-        required: false
-        default: "mynamespace"
-      registry_host:
-        description: "Registry hostname"
-        required: false
-        default: "sandbox.vps.blincpay.io"
+        required: true
+        description: 'Comma-separated list of components to deploy'
+        default: 'api, worker, scheduler'
+      run_id:
+        required: true
+        description: 'Run ID of the build workflow'
 
 jobs:
-  build:
-    uses: your-org/your-public-template-repo/.github/workflows/build.yml@main
+  release:
+    uses: Blinc-Technologies/workflow-templates/.github/workflows/release.yml@main
     with:
+      environment: ${{ inputs.environment }}
+      components: ${{ inputs.components }}
+      run_id: ${{ inputs.run_id }}
+      trigger_type: ${{ github.event_name }}
+      workflow_run_id: ${{ github.event.workflow_run.id }}
+      workflow_run_conclusion: ${{ github.event.workflow_run.conclusion }}
+      workflow_run_branch: ${{ github.event.workflow_run.head_branch }}
       project_name: ${{ vars.PROJECT_NAME }}
-      components_to_build: ${{ vars.COMPONENTS_TO_BUILD }}
-      create_release: ${{ github.event.inputs.should_create_release }}
-
-  deploy:
-    needs: build
-    if: ${{ (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/feature/'))) || (github.event_name == 'workflow_dispatch' && github.event.inputs.should_create_release == 'true') }}
-    uses: your-org/your-public-template-repo/.github/workflows/release.yml@main
-    with:
-      environment: ${{ github.event.inputs.environment || 'test' }}
-      components: ${{ github.event.inputs.components || vars.COMPONENTS_TO_BUILD }}
-      run_id: ${{ github.run_id }}
-      project_name: ${{ github.event.inputs.project_name || vars.PROJECT_NAME }}
-      namespace: ${{ github.event.inputs.namespace }}
+      namespace: ${{ vars.NAMESPACE }}
       secret_store_name: ${{ vars.SECRET_STORE_NAME }}
+    secrets:
+      gh_actions_token: ${{ secrets.GH_ACTIONS_TOKEN }}
+      gh_gitops_token: ${{ secrets.GH_GITOPS_TOKEN }}

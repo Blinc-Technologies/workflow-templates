@@ -1,80 +1,110 @@
-name: Release
+name: Reusable Release Workflow
 
 on:
   workflow_call:
     inputs:
       environment:
-        description: 'Environment to deploy to (test | staging | prod)'
-        required: true
+        required: false
         type: string
-        default: 'test'
+        description: 'test | staging | prod (optional for auto-triggered runs)'
       components:
-        description: 'Comma-separated list of components to release (e.g. api, grpc, subscriber, etc.)'
-        required: true
+        required: false
         type: string
+        description: 'Comma-separated list (optional for auto-triggered runs)'
       run_id:
-        description: 'Run ID of the build workflow'
-        required: true
+        required: false
         type: string
+        description: 'Run ID of the build workflow (optional for auto-triggered runs)'
       project_name:
-        description: 'Name of the project'
         required: true
         type: string
+        description: 'Project name'
       namespace:
-        description: 'Kubernetes namespace for deployment'
         required: true
         type: string
+        description: 'Kubernetes namespace'
       secret_store_name:
-        description: 'Name of the external secret store'
         required: true
         type: string
+        description: 'External secret store name'
+      gitops_repo:
+        required: false
+        type: string
+        default: 'Blinc-Technologies/blinc-gitops'
+        description: 'GitOps repository'
+      trigger_type:
+        required: true
+        type: string
+        description: 'workflow_run | workflow_dispatch'
+      workflow_run_id:
+        required: false
+        type: string
+        description: 'Workflow run ID for auto-triggered runs'
+      workflow_run_conclusion:
+        required: false
+        type: string
+        description: 'Conclusion of workflow run'
+      workflow_run_branch:
+        required: false
+        type: string
+        description: 'Branch of workflow run'
+    secrets:
+      gh_actions_token:
+        required: true
+      gh_gitops_token:
+        required: true
+
+env:
+  GITOPS_REPO: ${{ inputs.gitops_repo }}
+  GITOPS_REPO_PATH: blinc-gitops
 
 jobs:
   release:
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
-    env:
-      # TODO: Configure this to your organization's GitOps repository
-      GITOPS_REPO: Blinc-Technologies/blinc-gitops
-      GITOPS_REPO_PATH: blinc-gitops
-      PROJECT_NAME: ${{ inputs.project_name }}
-      NAMESPACE: ${{ inputs.namespace }}
-      SECRET_STORE_NAME: ${{ inputs.secret_store_name }}
-      ENVIRONMENT: ${{ inputs.environment }}
-      COMPONENTS: ${{ inputs.components }}
-      RUN_ID: ${{ inputs.run_id }}
-      github_token: ${{ secrets.GITHUB_TOKEN }}    
+    environment: ${{ inputs.environment || 'test' }}
+    if: >
+      inputs.trigger_type == 'workflow_dispatch' ||
+      (
+        inputs.trigger_type == 'workflow_run' && 
+        inputs.workflow_run_conclusion == 'success' && 
+        inputs.workflow_run_branch == 'main'
+      )
+  
     steps:
-    - name: Debug artifact list
+    - name: Determine run parameters
+      id: params
       run: |
-        gh run view ${{ inputs.run_id }} --repo ${{ github.repository }} --json artifacts --jq '.artifacts[].name'
-      env:
-        GH_TOKEN: ${{ secrets.GH_ACTIONS_TOKEN }}
+        if [[ "${{ inputs.trigger_type }}" == "workflow_run" ]]; then
+          # Auto-trigger from build → defaults
+          echo "environment=test" >> $GITHUB_OUTPUT
+          echo "run_id=${{ inputs.workflow_run_id }}" >> $GITHUB_OUTPUT
+          echo "auto_detect_components=true" >> $GITHUB_OUTPUT
+        else
+          # Manual dispatch → use provided inputs
+          echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          echo "run_id=${{ inputs.run_id }}" >> $GITHUB_OUTPUT
+          echo "auto_detect_components=false" >> $GITHUB_OUTPUT
+          
+          # Validate environment
+          ENVIRONMENT="${{ inputs.environment }}"
+          if [[ "$ENVIRONMENT" != "test" && "$ENVIRONMENT" != "staging" && "$ENVIRONMENT" != "prod" ]]; then
+            echo "❌ Invalid environment: $ENVIRONMENT"
+            echo "   Valid environments are: test, staging, prod"
+            exit 1
+          fi
+        fi
 
     - name: Download Artifacts
       uses: actions/download-artifact@v4
       with:
-        github-token: ${{ secrets.GH_ACTIONS_TOKEN }}
-        run-id: ${{ inputs.run_id }}
+        github-token: ${{ secrets.gh_actions_token }}
+        run-id: ${{ steps.params.outputs.run_id }}
         name: release-artifacts
         path: releases/
-      continue-on-error: true
-      id: download-artifacts
     
-    - name: Verify release metadata
+    - name: Verify release metadata and determine components
+      id: components
       run: |
-        # Check if artifact download failed
-        if [[ "${{ steps.download-artifacts.outcome }}" != "success" ]]; then
-          echo "❌ Failed to download artifacts from run ID: ${{ inputs.run_id }}"
-          echo "   This could be due to:"
-          echo "   1. Invalid run ID"
-          echo "   2. Insufficient permissions to access the run"
-          echo "   3. The run doesn't exist or artifacts have expired"
-          echo "   4. The build workflow didn't generate artifacts (should_deploy=false)"
-          exit 1
-        fi
-        
-        # Look for any JSON files under releases/
         if ! ls releases/*.json >/dev/null 2>&1; then
           echo "❌ No release metadata found in the downloaded artifact."
           echo "   This likely means the triggering build workflow ran with 'should_deploy=false'."
@@ -82,29 +112,37 @@ jobs:
           exit 1
         fi
         echo "✅ Release metadata found."
-
-    - name: Set environment & components
-      id: set_environment_and_components
-      run: |
-        ENVIRONMENT="${{ inputs.environment }}"
-        if [[ "$ENVIRONMENT" != "test" && "$ENVIRONMENT" != "staging" && "$ENVIRONMENT" != "prod" ]]; then
-          echo "❌ Invalid environment: $ENVIRONMENT"
-          echo "   Valid environments are: test, staging, prod"
-          exit 1
+        
+        # Determine components list
+        if [[ "${{ steps.params.outputs.auto_detect_components }}" == "true" ]]; then
+          # Auto-detect from artifacts
+          COMPONENTS=$(ls releases/*.json | xargs -n1 basename | sed 's/\.json//g' | paste -sd, -)
+          echo "📦 Auto-detected components: $COMPONENTS"
+        else
+          # Use provided components
+          COMPONENTS="${{ inputs.components }}"
+          echo "📦 Using provided components: $COMPONENTS"
         fi
-        COMPONENTS="${{ inputs.components }}"
-        echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
-        ENVIRONMENT_UPPER=$(echo "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')
-        echo "environment_upper=$ENVIRONMENT_UPPER" >> $GITHUB_OUTPUT
+        
         echo "components=$COMPONENTS" >> $GITHUB_OUTPUT
         COMPONENTS_ARRAY="[$(echo "$COMPONENTS" | sed 's/,/, /g')]"
         echo "components_array=$COMPONENTS_ARRAY" >> $GITHUB_OUTPUT
 
-    - name: Enforce prod deploy policy (main only and must be tagged)
-      if: ${{ inputs.environment == 'prod' }}
+    - name: Set environment variables
+      id: env
       run: |
-        IFS=',' read -ra COMPONENTS <<< "${{ inputs.components }}"
+        ENVIRONMENT="${{ steps.params.outputs.environment }}"
+        echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+        
+        ENVIRONMENT_UPPER=$(echo "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')
+        echo "environment_upper=$ENVIRONMENT_UPPER" >> $GITHUB_OUTPUT
+
+    - name: Enforce prod deploy policy (main only and must be tagged)
+      if: ${{ steps.params.outputs.environment == 'prod' }}
+      run: |
+        IFS=',' read -ra COMPONENTS <<< "${{ steps.components.outputs.components }}"
         for COMPONENT in "${COMPONENTS[@]}"; do
+          COMPONENT=$(echo "$COMPONENT" | xargs)
           FILE="releases/$COMPONENT.json"
           if [[ ! -f "$FILE" ]]; then
             echo "❌ Missing release metadata for $COMPONENT"
@@ -132,21 +170,21 @@ jobs:
       uses: actions/checkout@v4
       with:
         repository: ${{ env.GITOPS_REPO }}
-        token: ${{ secrets.gh_gitops_token || secrets.GH_GITOPS_PAT }}
+        token: ${{ secrets.gh_gitops_token }}
         path: ${{ env.GITOPS_REPO_PATH }}
 
-    - name: Install yq
+    - name: Install yq for YAML manipulation
       run: |
         sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
         sudo chmod +x /usr/local/bin/yq
 
-    - name: Generate GitOps manifests
+    - name: Generate or Update GitOps manifests
       run: |
-        IFS=',' read -ra COMPONENTS <<< "${{ inputs.components }}"
+        IFS=',' read -ra COMPONENTS <<< "${{ steps.components.outputs.components }}"
         for COMPONENT in "${COMPONENTS[@]}"; do
-          # Trim whitespace from component name
           COMPONENT=$(echo "$COMPONENT" | xargs)
-          echo "🔍 Reading release tag for $COMPONENT"
+          echo "🔍 Processing $COMPONENT"
+          
           METADATA_FILE="releases/$COMPONENT.json"
           if [[ ! -f "$METADATA_FILE" ]]; then
             echo "❌ Release metadata for $COMPONENT not found"
@@ -161,11 +199,12 @@ jobs:
 
           echo "✅ Deploying $COMPONENT with tag $TAG"
           
-          DEST="${{ env.GITOPS_REPO_PATH }}/microservices/${{ inputs.environment }}/${{ inputs.project_name }}/$COMPONENT"
+          DEST="${{ env.GITOPS_REPO_PATH }}/microservices/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}/$COMPONENT"
+          VALUES_FILE="$DEST/values.yml"
           mkdir -p "$DEST"
 
           # Set environment name
-          case "${{ inputs.environment }}" in
+          case "${{ steps.env.outputs.environment }}" in
             "prod")
               ENV_NAME="Production"
               ;;
@@ -177,43 +216,23 @@ jobs:
               ;;
           esac
 
-          # Check if values.yml already exists
-          if [[ -f "$DEST/values.yml" ]]; then
-            echo "🔄 Updating existing manifest for $COMPONENT in ${{ inputs.environment }} environment"
+          # Check if values.yml exists
+          if [[ -f "$VALUES_FILE" ]]; then
+            echo "📝 Updating existing values.yml for $COMPONENT"
             
-            # Update only the dynamic fields while preserving existing configuration
-            yq eval ".image.repository = \"$REPOSITORY\"" -i "$DEST/values.yml"
-            yq eval ".image.tag = \"$TAG\"" -i "$DEST/values.yml"
-            yq eval ".releaseId = \"$COMMIT_SHA\"" -i "$DEST/values.yml"
-            yq eval ".branch = \"$BRANCH\"" -i "$DEST/values.yml"
-            yq eval ".commit = \"$COMMIT_SHA\"" -i "$DEST/values.yml"
-            yq eval ".externalSecret.forceUpdateAnnotation = \"$COMMIT_SHA\"" -i "$DEST/values.yml"
+            # Update only changed values
+            yq eval ".image.repository = \"$REPOSITORY\"" -i "$VALUES_FILE"
+            yq eval ".image.tag = \"$TAG\"" -i "$VALUES_FILE"
+            yq eval ".releaseId = \"$COMMIT_SHA\"" -i "$VALUES_FILE"
+            yq eval ".branch = \"$BRANCH\"" -i "$VALUES_FILE"
+            yq eval ".commit = \"$COMMIT_SHA\"" -i "$VALUES_FILE"
+            yq eval ".env.ENVIRONMENT = \"$ENV_NAME\"" -i "$VALUES_FILE"
+            yq eval ".externalSecret.forceUpdateAnnotation = \"$COMMIT_SHA\"" -i "$VALUES_FILE"
             
-            # Only set these if they don't exist or are empty
-            if ! yq eval '.projectName' "$DEST/values.yml" | grep -q .; then
-              yq eval ".projectName = \"${{ inputs.project_name }}\"" -i "$DEST/values.yml"
-            fi
-            if ! yq eval '.componentName' "$DEST/values.yml" | grep -q .; then
-              yq eval ".componentName = \"$COMPONENT\"" -i "$DEST/values.yml"
-            fi
-            if ! yq eval '.namespace' "$DEST/values.yml" | grep -q .; then
-              yq eval ".namespace = \"${{ inputs.namespace }}\"" -i "$DEST/values.yml"
-            fi
-            if ! yq eval '.env.ENVIRONMENT' "$DEST/values.yml" | grep -q .; then
-              yq eval ".env.ENVIRONMENT = \"$ENV_NAME\"" -i "$DEST/values.yml"
-            fi
-            if ! yq eval '.externalSecret.enabled' "$DEST/values.yml" | grep -q .; then
-              yq eval ".externalSecret.enabled = true" -i "$DEST/values.yml"
-            fi
-            if ! yq eval '.externalSecret.storeName' "$DEST/values.yml" | grep -q .; then
-              yq eval ".externalSecret.storeName = \"${{ inputs.secret_store_name }}\"" -i "$DEST/values.yml"
-            fi
-            
-            echo "✅ Updated manifest for $COMPONENT"
           else
-            echo "📝 Creating new manifest for $COMPONENT in ${{ inputs.environment }} environment"
+            echo "✨ Creating new values.yml for $COMPONENT"
             
-            # Create new manifest with default values
+            # Create new file with all default values
             {
               echo "image:"
               echo "  repository: $REPOSITORY"
@@ -230,7 +249,7 @@ jobs:
               echo "  enabled: true"
               echo "  forceUpdateAnnotation: $COMMIT_SHA"
               echo "  storeName: ${{ inputs.secret_store_name }}"
-              echo "replicaCount: 1" # TODO: make this dynamic
+              echo "replicaCount: 1"
               echo "podLabels: {}"
               echo "addDaprSidecar: false"
               echo "podAnnotations: {}"
@@ -241,45 +260,56 @@ jobs:
               echo "volumeMounts: []"
               echo "volumes: []"
               echo "service:"
-              echo "  enabled: true" # TODO: make this dynamic
+              echo "  enabled: true"
               echo "  type: ClusterIP"
-              echo "isGrpc: false" # TODO: make this dynamic
+              echo "isGrpc: false"
               echo "autoscaling:"
-              echo "  enabled: false" # TODO: make this dynamic
-              
-            } > "$DEST/values.yml"
-            
-            echo "✅ Created new manifest for $COMPONENT"
+              echo "  enabled: false"
+            } > "$VALUES_FILE"
           fi
         done
 
     - name: Extract commit hash
       id: metadata
       run: |
-        FIRST_COMPONENT=$(echo "${{ inputs.components }}" | cut -d',' -f1)
-        COMMIT_SHA=$(jq -r .commit releases/$FIRST_COMPONENT.json)
+        FIRST_COMPONENT=$(echo "${{ steps.components.outputs.components }}" | cut -d',' -f1 | xargs)
+        COMMIT_SHA=$(jq -r .commit "releases/$FIRST_COMPONENT.json")
         echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
 
-    - name: Push to GitOps repo # (test/staging)
-      if: ${{ inputs.environment != 'prod' }}
+    - name: Push to GitOps repo (test/staging)
+      if: ${{ steps.params.outputs.environment != 'prod' }}
       run: |
         cd ${{ env.GITOPS_REPO_PATH }}
         git config user.name github-actions
         git config user.email github-actions@github.com
         git add .
-        git commit -m "🚀 Deploy ${{ inputs.project_name }} Commit: ${{ steps.metadata.outputs.commit_sha }}  Environment: ${{ steps.set_environment_and_components.outputs.environment_upper }}"
-        git push origin main
+        
+        if git diff --staged --quiet; then
+          echo "ℹ️ No changes to commit"
+        else
+          git commit -m "🚀 Deploy ${{ inputs.project_name }} Commit: ${{ steps.metadata.outputs.commit_sha }}  Environment: ${{ steps.env.outputs.environment_upper }}"
+          git push origin main
+          echo "✅ Changes pushed to GitOps repository"
+        fi
 
     - name: Open PR for production deployment
-      if: ${{ inputs.environment == 'prod' }}
+      if: ${{ steps.params.outputs.environment == 'prod' }}
       uses: peter-evans/create-pull-request@v5
       with:
-        token: ${{ secrets.gh_gitops_token || secrets.GH_GITOPS_PAT }}
+        token: ${{ secrets.gh_gitops_token }}
         base: main
-        branch: release-${{ inputs.project_name }}-${{ steps.metadata.outputs.commit_sha }}-${{ inputs.environment }}
-        title: "[${{ steps.set_environment_and_components.outputs.environment_upper }}] Release ${{ inputs.project_name }}"
+        branch: release-${{ inputs.project_name }}-${{ steps.metadata.outputs.commit_sha }}-${{ steps.env.outputs.environment }}
+        title: "[${{ steps.env.outputs.environment_upper }}] Release ${{ inputs.project_name }}"
         path: ${{ env.GITOPS_REPO_PATH }}
-        body: "Release includes components: ${{ steps.set_environment_and_components.outputs.components_array }}"
-        commit-message: "🚀 Release ${{ inputs.project_name }} Commit: ${{ steps.metadata.outputs.commit_sha }}  Environment: ${{ steps.set_environment_and_components.outputs.environment_upper }}"
+        body: |
+          ## Release Details
+          
+          **Project:** ${{ inputs.project_name }}
+          **Environment:** ${{ steps.env.outputs.environment_upper }}
+          **Commit:** ${{ steps.metadata.outputs.commit_sha }}
+          **Components:** ${{ steps.components.outputs.components_array }}
+          
+          This PR was automatically generated by the release workflow.
+        commit-message: "🚀 Release ${{ inputs.project_name }} Commit: ${{ steps.metadata.outputs.commit_sha }}  Environment: ${{ steps.env.outputs.environment_upper }}"
         delete-branch: true
         labels: release-${{ inputs.project_name }}
