@@ -3,6 +3,10 @@ name: Build
 on:
   workflow_call:
     inputs:
+      environment:
+        required: false
+        type: string
+        description: 'test | staging | prod (optional for auto-triggered runs)'
       project_name:
         description: "Name of the project (used in image repo naming)"
         required: true
@@ -27,6 +31,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'test' }}
     env:
       REGISTRY_HOST: ${{ vars.REGISTRY_HOST }}
       PROJECT_NAME: ${{ inputs.project_name }}
