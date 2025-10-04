@@ -248,7 +248,6 @@ jobs:
               echo "externalSecret:"
               echo "  enabled: true"
               echo "  forceUpdateAnnotation: $COMMIT_SHA"
-              echo "  storeName: ${{ inputs.secret_store_name }}"
               echo "replicaCount: 1"
               echo "podLabels: {}"
               echo "addDaprSidecar: false"
