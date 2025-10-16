@@ -55,10 +55,10 @@ jobs:
           while IFS= read -r dir; do
             component=$(basename "$dir" | sed 's/.*\.//' | tr '[:upper:]' '[:lower:]')
             if [[ "${{ inputs.components_to_build }}" == *"$component"* ]]; then
-              components=$(jq -c --arg c "$component" '. += [$c]' <<< "$components")
+              components=$(jq -c --arg c "$component" --arg p "$dir" '. += [{"component":$c,"path":$p}]' <<< "$components")
             fi
           done < <(find src -maxdepth 1 -mindepth 1 -type d -exec test -f {}/Dockerfile \; -print)
-          echo "value={\"component\":$components}" >> $GITHUB_OUTPUT
+          echo "value={\"include\":$components}" >> $GITHUB_OUTPUT
 
   build:
     needs: prepare
@@ -90,7 +90,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: src/${{ matrix.component }}/Dockerfile
+          file: ${{ matrix.path }}/Dockerfile
           push: ${{ needs.prepare.outputs.should_release == 'true' }}
           tags: ${{ vars.REGISTRY_HOST }}/${{ inputs.project_name }}_${{ matrix.component }}:${{ github.sha }}
           cache-from: type=gha
