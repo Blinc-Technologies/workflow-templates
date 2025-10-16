@@ -108,8 +108,8 @@ jobs:
           name: metadata-${{ matrix.component }}
           path: ${{ matrix.component }}.json
           retention-days: 1
-
-  upload-artifacts:
+          
+  consolidate:
     needs: [prepare, build]
     if: needs.prepare.outputs.should_release == 'true'
     runs-on: ubuntu-latest
@@ -125,22 +125,17 @@ jobs:
               mv "$dir"/*.json metadata/ 2>/dev/null || true
             fi
           done
-
-      - name: Consolidate metadata
-        run: |
-          jq -s '.' metadata/*.json > release-metadata.json
-          echo "Consolidated metadata:"
-          cat release-metadata.json
+          # Clean up empty subdirs
+          find metadata -type d -empty -delete
 
       - uses: actions/upload-artifact@v4
         with:
           name: release-artifacts
-          path: release-metadata.json
+          path: metadata
           retention-days: 90
 
       - name: Delete temporary artifacts
         uses: geekyeggo/delete-artifact@v5
         with:
           name: metadata-*
-          failOnError: false
-        
+          failOnError: false       
