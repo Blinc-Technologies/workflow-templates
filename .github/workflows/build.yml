@@ -102,7 +102,7 @@ jobs:
         id: metadata
         if: needs.prepare.outputs.should_release == 'true'
         run: |
-          metadata=$(jq -n \
+          metadata=$(jq -nc \
             --arg component "${{ matrix.component }}" \
             --arg branch "${{ github.ref_name }}" \
             --arg commit "${{ github.sha }}" \
@@ -125,3 +125,4 @@ jobs:
         with:
           name: release-artifacts
           path: release-metadata.json
+          retention-days: 90
