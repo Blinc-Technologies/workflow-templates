@@ -69,6 +69,8 @@ jobs:
       fail-fast: false
       max-parallel: 10
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    outputs:
+      metadata: ${{ steps.metadata.outputs.json }}
     
     steps:
       - uses: actions/checkout@v4
@@ -78,7 +80,6 @@ jobs:
           driver-opts: |
             image=moby/buildkit:latest
             network=host
-
       # - uses: docker/login-action@v3
       #   if: needs.prepare.outputs.should_release == 'true'
       #   with:
@@ -98,19 +99,29 @@ jobs:
           provenance: false
 
       - name: Generate metadata
+        id: metadata
         if: needs.prepare.outputs.should_release == 'true'
         run: |
-          jq -n \
+          metadata=$(jq -n \
             --arg component "${{ matrix.component }}" \
             --arg branch "${{ github.ref_name }}" \
             --arg commit "${{ github.sha }}" \
             --arg repository "${{ vars.REGISTRY_HOST }}/${{ inputs.project_name }}_${{ matrix.component }}" \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{component:$component,branch:$branch,commit:$commit,tag:$commit,repository:$repository,timestamp:$timestamp}' \
-            > ${{ matrix.component }}.json
+            '{component:$component,branch:$branch,commit:$commit,tag:$commit,repository:$repository,timestamp:$timestamp}')
+          echo "json=$metadata" >> $GITHUB_OUTPUT
+
+  consolidate:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect all metadata
+        run: |
+          echo '${{ toJson(needs.build.outputs) }}' | jq -r '.metadata' | jq -s '.' > release-metadata.json
+          cat release-metadata.json
 
       - uses: actions/upload-artifact@v4
-        if: needs.prepare.outputs.should_release == 'true'
         with:
           name: release-artifacts
-          path: ${{ matrix.component }}.json
+          path: release-metadata.json
