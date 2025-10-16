@@ -108,8 +108,8 @@ jobs:
           name: metadata-${{ matrix.component }}
           path: ${{ matrix.component }}.json
           retention-days: 1
-          
-  consolidate:
+
+  artifacts-upload:
     needs: [prepare, build]
     if: needs.prepare.outputs.should_release == 'true'
     runs-on: ubuntu-latest
