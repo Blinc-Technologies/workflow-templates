@@ -116,8 +116,15 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: build-metadata
           path: metadata
+
+      - name: Flatten metadata files
+        run: |
+          for dir in metadata/metadata-*; do
+            if [ -d "$dir" ]; then
+              mv "$dir"/*.json metadata/ 2>/dev/null || true
+            fi
+          done
 
       - name: Consolidate metadata
         run: |
