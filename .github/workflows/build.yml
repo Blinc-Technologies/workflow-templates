@@ -79,12 +79,12 @@ jobs:
             image=moby/buildkit:latest
             network=host
 
-      - uses: docker/login-action@v3
-        if: needs.prepare.outputs.should_release == 'true'
-        with:
-          registry: ${{ vars.REGISTRY_HOST }}
-          username: ${{ secrets.registry_username }}
-          password: ${{ secrets.registry_password }}
+      # - uses: docker/login-action@v3
+      #   if: needs.prepare.outputs.should_release == 'true'
+      #   with:
+      #     registry: ${{ vars.REGISTRY_HOST }}
+      #     username: ${{ secrets.registry_username }}
+      #     password: ${{ secrets.registry_password }}
 
       - name: Build and push
         uses: docker/build-push-action@v5
