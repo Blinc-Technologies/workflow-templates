@@ -247,7 +247,7 @@ jobs:
               echo "  ENVIRONMENT: $ENV_NAME"
               echo "externalSecret:"
               echo "  enabled: true"
-              echo "  forceUpdateAnnotation: $COMMIT_SHA-v1"
+              echo "  forceUpdateAnnotation: ${COMMIT_SHA}-v1"
               echo "replicaCount: 1"
               echo "podLabels: {}"
               echo "addDaprSidecar: false"
