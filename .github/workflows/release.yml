@@ -227,7 +227,7 @@ jobs:
             yq eval ".branch = \"$BRANCH\"" -i "$VALUES_FILE"
             yq eval ".commit = \"$COMMIT_SHA\"" -i "$VALUES_FILE"
             yq eval ".env.ENVIRONMENT = \"$ENV_NAME\"" -i "$VALUES_FILE"
-            yq eval ".externalSecret.forceUpdateAnnotation = \"$COMMIT_SHA\"" -i "$VALUES_FILE"
+            yq eval ".externalSecret.forceUpdateAnnotation = \"${COMMIT_SHA}-v1\"" -i "$VALUES_FILE"
             
           else
             echo "✨ Creating new values.yml for $COMPONENT"
