@@ -1,4 +1,4 @@
-name: Reusable NuGet Build and Publish
+name: NuGet Build and Publish
 
 on:
   workflow_call:
@@ -48,7 +48,7 @@ jobs:
       packages: write
     
     outputs: 
-      version: ${{ steps.version.outputs.clean_version }}
+      version: ${{ steps.version.outputs.full_version }}
       commitsSinceVersionSource: ${{ steps.gitversion.outputs.commitsSinceVersionSource }}
     
     steps:
@@ -69,16 +69,20 @@ jobs:
         overrideConfig: |
           mode=${{ inputs.gitversion-mode }}
     
-    - name: Set clean version
+    - name: Set version
       id: version
       run: |
+        FULL_VERSION="${{ steps.gitversion.outputs.semVer }}"
         CLEAN_VERSION="${{ steps.gitversion.outputs.majorMinorPatch }}"
+        echo "full_version=$FULL_VERSION" >> $GITHUB_OUTPUT
         echo "clean_version=$CLEAN_VERSION" >> $GITHUB_OUTPUT
+        echo "Full Version (SemVer): $FULL_VERSION"
         echo "Clean Version: $CLEAN_VERSION"
     
     - name: Display GitVersion outputs
       run: |
         echo "SemVer: ${{ steps.gitversion.outputs.semVer }}"
+        echo "Full Version: ${{ steps.version.outputs.full_version }}"
         echo "Clean Version: ${{ steps.version.outputs.clean_version }}"
         echo "CommitsSinceVersionSource: ${{ steps.gitversion.outputs.commitsSinceVersionSource }}"
     
@@ -95,8 +99,8 @@ jobs:
         dotnet build ${{ inputs.solution-file }} \
           --configuration Release \
           --no-restore \
-          -p:Version='${{ steps.version.outputs.clean_version }}' \
-          -p:PackageVersion='${{ steps.version.outputs.clean_version }}' \
+          -p:Version='${{ steps.version.outputs.full_version }}' \
+          -p:PackageVersion='${{ steps.version.outputs.full_version }}' \
           -p:AssemblyVersion='${{ steps.version.outputs.clean_version }}' \
           -p:FileVersion='${{ steps.version.outputs.clean_version }}'
     
