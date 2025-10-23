@@ -1,4 +1,4 @@
-name: NuGet Build and Publish
+name: Reusable NuGet Build and Publish
 
 on:
   workflow_call:
@@ -27,7 +27,7 @@ on:
         type: string
         default: 'ContinuousDelivery'
       create-release:
-        description: 'Whether to create a GitHub release'
+        description: 'Whether to create a GitHub Release'
         required: false
         type: boolean
         default: true
@@ -67,7 +67,7 @@ jobs:
       uses: gittools/actions/gitversion/execute@v1.1.1
       with:
         overrideConfig: |
-          mode: ${{ inputs.gitversion-mode }}
+          mode=${{ inputs.gitversion-mode }}
     
     - name: Set clean version
       id: version
@@ -75,11 +75,13 @@ jobs:
         CLEAN_VERSION="${{ steps.gitversion.outputs.majorMinorPatch }}"
         echo "clean_version=$CLEAN_VERSION" >> $GITHUB_OUTPUT
         echo "Clean Version: $CLEAN_VERSION"
+        echo "NuGet Version: ${{ steps.gitversion.outputs.nuGetVersionV2 }}"
     
     - name: Display GitVersion outputs
       run: |
         echo "SemVer: ${{ steps.gitversion.outputs.semVer }}"
         echo "Clean Version: ${{ steps.version.outputs.clean_version }}"
+        echo "NuGet Version: ${{ steps.gitversion.outputs.nuGetVersionV2 }}"
         echo "CommitsSinceVersionSource: ${{ steps.gitversion.outputs.commitsSinceVersionSource }}"
     
     - name: Setup .NET
@@ -96,7 +98,7 @@ jobs:
           --configuration Release \
           --no-restore \
           -p:Version='${{ steps.version.outputs.clean_version }}' \
-          -p:PackageVersion='${{ steps.version.outputs.clean_version }}' \
+          -p:PackageVersion='${{ steps.gitversion.outputs.nuGetVersionV2 }}' \
           -p:AssemblyVersion='${{ steps.version.outputs.clean_version }}' \
           -p:FileVersion='${{ steps.version.outputs.clean_version }}'
     
@@ -109,16 +111,14 @@ jobs:
     
     - name: Pack projects
       run: |
-        projects_list="${{ inputs.projects }}"
-        IFS=$'\n' read -ra project_array <<< "$projects_list"
-        for project in "${project_array[@]}"; do
-          project=$(echo "$project" | xargs)
+        echo "${{ inputs.projects }}" | while IFS= read -r line || [[ -n "$line" ]]; do
+          project=$(echo "$line" | xargs)
           if [ -n "$project" ]; then
             echo "Packing: $project"
             dotnet pack "$project" \
               --configuration Release \
               --no-build \
-              -p:PackageVersion='${{ steps.version.outputs.clean_version }}' \
+              -p:PackageVersion='${{ steps.gitversion.outputs.nuGetVersionV2 }}' \
               --output ./nupkg
           fi
         done
