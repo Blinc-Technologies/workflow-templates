@@ -1,0 +1,154 @@
+name: NuGet Build and Publish
+
+on:
+  workflow_call:
+    inputs:
+      solution-file:
+        description: 'Path to the solution file'
+        required: true
+        type: string
+      projects:
+        description: 'Newline-separated list of project paths to pack'
+        required: true
+        type: string
+      dotnet-version:
+        description: '.NET SDK version to use'
+        required: false
+        type: string
+        default: '8.0.x'
+      run-tests:
+        description: 'Whether to run tests'
+        required: false
+        type: boolean
+        default: true
+      gitversion-mode:
+        description: 'GitVersion mode (Mainline or ContinuousDelivery)'
+        required: false
+        type: string
+        default: 'ContinuousDelivery'
+      create-release:
+        description: 'Whether to create a GitHub release'
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      version:
+        description: "The version that was built"
+        value: ${{ jobs.build.outputs.version }}
+      commitsSinceVersionSource:
+        description: "Number of commits since last version"
+        value: ${{ jobs.build.outputs.commitsSinceVersionSource }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      packages: write
+    
+    outputs: 
+      version: ${{ steps.version.outputs.clean_version }}
+      commitsSinceVersionSource: ${{ steps.gitversion.outputs.commitsSinceVersionSource }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0 # Required for GitVersion
+    
+    # Install and calculate version with GitVersion
+    - name: Install GitVersion
+      uses: gittools/actions/gitversion/setup@v1.1.1
+      with:
+        versionSpec: '5.x'
+    
+    - name: Determine Version
+      id: gitversion
+      uses: gittools/actions/gitversion/execute@v1.1.1
+      with:
+        overrideConfig: |
+          mode=${{ inputs.gitversion-mode }}
+    
+    - name: Set clean version
+      id: version
+      run: |
+        CLEAN_VERSION="${{ steps.gitversion.outputs.majorMinorPatch }}"
+        echo "clean_version=$CLEAN_VERSION" >> $GITHUB_OUTPUT
+        echo "Clean Version: $CLEAN_VERSION"
+    
+    - name: Display GitVersion outputs
+      run: |
+        echo "SemVer: ${{ steps.gitversion.outputs.semVer }}"
+        echo "Clean Version: ${{ steps.version.outputs.clean_version }}"
+        echo "CommitsSinceVersionSource: ${{ steps.gitversion.outputs.commitsSinceVersionSource }}"
+    
+    # Build and pack
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ inputs.dotnet-version }}
+    
+    - name: Restore dependencies
+      run: dotnet restore ${{ inputs.solution-file }}
+    
+    - name: Build solution
+      run: dotnet build ${{ inputs.solution-file }} --configuration Release --no-restore -p:Version='${{ steps.version.outputs.clean_version }}' -p:PackageVersion='${{ steps.version.outputs.clean_version }}' -p:AssemblyVersion='${{ steps.version.outputs.clean_version }}' -p:FileVersion='${{ steps.version.outputs.clean_version }}'
+    
+    - name: Run tests
+      if: inputs.run-tests
+      run: dotnet test ${{ inputs.solution-file }} --configuration Release --no-build --verbosity normal --no-restore
+    
+    - name: Pack projects
+      run: |
+        echo '${{ inputs.projects }}' | jq -r '.[]' | while read -r project; do
+          echo "Packing: $project"
+          dotnet pack "$project" --configuration Release --no-build -p:PackageVersion='${{ steps.version.outputs.clean_version }}' -p:Version='${{ steps.version.outputs.clean_version }}' --output ./nupkg
+        done
+    
+    - name: List packed files
+      run: ls -la ./nupkg/
+    
+    - name: Upload NuGet package artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: nuget-packages
+        path: ./nupkg/*.nupkg
+        retention-days: 7
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request' && needs.build.outputs.commitsSinceVersionSource > 0
+    
+    permissions:
+      contents: write
+      packages: write
+    
+    steps:
+    - name: Download NuGet package artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: nuget-packages
+        path: ./nuget-packages
+    
+    # Push to GitHub Packages
+    - name: Push packages to GitHub Packages
+      run: |
+        dotnet nuget push ./nuget-packages/*.nupkg \
+          --api-key ${{ secrets.GITHUB_TOKEN }} \
+          --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
+          --skip-duplicate
+    
+    # Create GitHub Release
+    - name: Create GitHub Release
+      if: inputs.create-release
+      uses: ncipollo/release-action@v1
+      with:
+        tag: v${{ needs.build.outputs.version }}
+        name: Release ${{ needs.build.outputs.version }}
+        artifacts: "./nuget-packages/*.nupkg"
+        token: ${{ secrets.GITHUB_TOKEN }}
+        generateReleaseNotes: true
+        draft: false
+        prerelease: false
