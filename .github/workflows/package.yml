@@ -1,4 +1,4 @@
-name: NuGet Build and Publish
+name: Reusable NuGet Build and Publish
 
 on:
   workflow_call:
@@ -27,7 +27,7 @@ on:
         type: string
         default: 'ContinuousDelivery'
       create-release:
-        description: 'Whether to create a GitHub release'
+        description: 'Whether to create a GitHub Release'
         required: false
         type: boolean
         default: true
@@ -48,7 +48,7 @@ jobs:
       packages: write
     
     outputs: 
-      version: ${{ steps.version.outputs.full_version }}
+      version: ${{ steps.version.outputs.clean_version }}
       commitsSinceVersionSource: ${{ steps.gitversion.outputs.commitsSinceVersionSource }}
     
     steps:
@@ -69,21 +69,19 @@ jobs:
         overrideConfig: |
           mode=${{ inputs.gitversion-mode }}
     
-    - name: Set version
+    - name: Set clean version
       id: version
       run: |
-        FULL_VERSION="${{ steps.gitversion.outputs.semVer }}"
         CLEAN_VERSION="${{ steps.gitversion.outputs.majorMinorPatch }}"
-        echo "full_version=$FULL_VERSION" >> $GITHUB_OUTPUT
         echo "clean_version=$CLEAN_VERSION" >> $GITHUB_OUTPUT
-        echo "Full Version (SemVer): $FULL_VERSION"
         echo "Clean Version: $CLEAN_VERSION"
+        echo "NuGet Version: ${{ steps.gitversion.outputs.nuGetVersionV2 }}"
     
     - name: Display GitVersion outputs
       run: |
         echo "SemVer: ${{ steps.gitversion.outputs.semVer }}"
-        echo "Full Version: ${{ steps.version.outputs.full_version }}"
         echo "Clean Version: ${{ steps.version.outputs.clean_version }}"
+        echo "NuGet Version: ${{ steps.gitversion.outputs.nuGetVersionV2 }}"
         echo "CommitsSinceVersionSource: ${{ steps.gitversion.outputs.commitsSinceVersionSource }}"
     
     - name: Setup .NET
@@ -99,8 +97,8 @@ jobs:
         dotnet build ${{ inputs.solution-file }} \
           --configuration Release \
           --no-restore \
-          -p:Version='${{ steps.version.outputs.full_version }}' \
-          -p:PackageVersion='${{ steps.version.outputs.full_version }}' \
+          -p:Version='${{ steps.version.outputs.clean_version }}' \
+          -p:PackageVersion='${{ steps.gitversion.outputs.nuGetVersionV2 }}' \
           -p:AssemblyVersion='${{ steps.version.outputs.clean_version }}' \
           -p:FileVersion='${{ steps.version.outputs.clean_version }}'
     
@@ -113,16 +111,14 @@ jobs:
     
     - name: Pack projects
       run: |
-        IFS=$'\n'
-        for project in ${{ inputs.projects }}; do
-          project=$(echo "$project" | xargs)
+        echo "${{ inputs.projects }}" | while IFS= read -r line || [[ -n "$line" ]]; do
+          project=$(echo "$line" | xargs)
           if [ -n "$project" ]; then
             echo "Packing: $project"
             dotnet pack "$project" \
               --configuration Release \
               --no-build \
-              -p:PackageVersion='${{ steps.version.outputs.clean_version }}' \
-              -p:Version='${{ steps.version.outputs.clean_version }}' \
+              -p:PackageVersion='${{ steps.gitversion.outputs.nuGetVersionV2 }}' \
               --output ./nupkg
           fi
         done
