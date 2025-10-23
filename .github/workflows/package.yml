@@ -67,7 +67,7 @@ jobs:
       uses: gittools/actions/gitversion/execute@v1.1.1
       with:
         overrideConfig: |
-          mode=${{ inputs.gitversion-mode }}
+          mode: ${{ inputs.gitversion-mode }}
     
     - name: Set clean version
       id: version
@@ -109,8 +109,9 @@ jobs:
     
     - name: Pack projects
       run: |
-        IFS=$'\n'
-        for project in ${{ inputs.projects }}; do
+        projects_list="${{ inputs.projects }}"
+        IFS=$'\n' read -ra project_array <<< "$projects_list"
+        for project in "${project_array[@]}"; do
           project=$(echo "$project" | xargs)
           if [ -n "$project" ]; then
             echo "Packing: $project"
@@ -118,7 +119,6 @@ jobs:
               --configuration Release \
               --no-build \
               -p:PackageVersion='${{ steps.version.outputs.clean_version }}' \
-              -p:Version='${{ steps.version.outputs.clean_version }}' \
               --output ./nupkg
           fi
         done
