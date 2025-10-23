@@ -1,4 +1,4 @@
-name: NuGet Build and Publish
+name: Reusable NuGet Build and Publish
 
 on:
   workflow_call:
@@ -100,11 +100,18 @@ jobs:
       run: dotnet test ${{ inputs.solution-file }} --configuration Release --no-build --verbosity normal --no-restore
     
     - name: Pack projects
+      shell: bash
       run: |
-        echo '${{ inputs.projects }}' | jq -r '.[]' | while read -r project; do
-          echo "Packing: $project"
-          dotnet pack "$project" --configuration Release --no-build -p:PackageVersion='${{ steps.version.outputs.clean_version }}' -p:Version='${{ steps.version.outputs.clean_version }}' --output ./nupkg
-        done
+        while IFS= read -r project; do
+          project=$(echo "$project" | xargs)
+          if [ ! -z "$project" ]; then
+            echo "Packing: $project"
+            dotnet pack "$project" --configuration Release --no-build \
+              -p:PackageVersion='${{ steps.version.outputs.clean_version }}' \
+              -p:Version='${{ steps.version.outputs.clean_version }}' \
+              --output ./nupkg
+          fi
+        done <<< "${{ inputs.projects }}"
     
     - name: List packed files
       run: ls -la ./nupkg/
