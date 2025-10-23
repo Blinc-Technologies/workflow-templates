@@ -1,4 +1,4 @@
-name: Reusable NuGet Build and Publish
+name: NuGet Build and Publish
 
 on:
   workflow_call:
