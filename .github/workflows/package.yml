@@ -55,9 +55,8 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0 # Required for GitVersion
+        fetch-depth: 0
     
-    # Install and calculate version with GitVersion
     - name: Install GitVersion
       uses: gittools/actions/gitversion/setup@v1.1.1
       with:
@@ -68,7 +67,7 @@ jobs:
       uses: gittools/actions/gitversion/execute@v1.1.1
       with:
         overrideConfig: |
-          mode=${{ inputs.gitversion-mode }}
+          mode: ${{ inputs.gitversion-mode }}
     
     - name: Set clean version
       id: version
@@ -83,7 +82,6 @@ jobs:
         echo "Clean Version: ${{ steps.version.outputs.clean_version }}"
         echo "CommitsSinceVersionSource: ${{ steps.gitversion.outputs.commitsSinceVersionSource }}"
     
-    # Build and pack
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
@@ -93,17 +91,36 @@ jobs:
       run: dotnet restore ${{ inputs.solution-file }}
     
     - name: Build solution
-      run: dotnet build ${{ inputs.solution-file }} --configuration Release --no-restore -p:Version='${{ steps.version.outputs.clean_version }}' -p:PackageVersion='${{ steps.version.outputs.clean_version }}' -p:AssemblyVersion='${{ steps.version.outputs.clean_version }}' -p:FileVersion='${{ steps.version.outputs.clean_version }}'
+      run: |
+        dotnet build ${{ inputs.solution-file }} \
+          --configuration Release \
+          --no-restore \
+          -p:Version='${{ steps.version.outputs.clean_version }}' \
+          -p:PackageVersion='${{ steps.version.outputs.clean_version }}' \
+          -p:AssemblyVersion='${{ steps.version.outputs.clean_version }}' \
+          -p:FileVersion='${{ steps.version.outputs.clean_version }}'
     
     - name: Run tests
       if: inputs.run-tests
       run: dotnet test ${{ inputs.solution-file }} --configuration Release --no-build --verbosity normal --no-restore
     
+    - name: Create nupkg directory
+      run: mkdir -p ./nupkg
+    
     - name: Pack projects
       run: |
-        echo '${{ inputs.projects }}' | jq -r '.[]' | while read -r project; do
-          echo "Packing: $project"
-          dotnet pack "$project" --configuration Release --no-build -p:PackageVersion='${{ steps.version.outputs.clean_version }}' -p:Version='${{ steps.version.outputs.clean_version }}' --output ./nupkg
+        projects_list="${{ inputs.projects }}"
+        IFS=$'\n' read -ra project_array <<< "$projects_list"
+        for project in "${project_array[@]}"; do
+          project=$(echo "$project" | xargs)
+          if [ -n "$project" ]; then
+            echo "Packing: $project"
+            dotnet pack "$project" \
+              --configuration Release \
+              --no-build \
+              -p:PackageVersion='${{ steps.version.outputs.clean_version }}' \
+              --output ./nupkg
+          fi
         done
     
     - name: List packed files
@@ -132,7 +149,6 @@ jobs:
         name: nuget-packages
         path: ./nuget-packages
     
-    # Push to GitHub Packages
     - name: Push packages to GitHub Packages
       run: |
         dotnet nuget push ./nuget-packages/*.nupkg \
@@ -140,7 +156,6 @@ jobs:
           --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
           --skip-duplicate
     
-    # Create GitHub Release
     - name: Create GitHub Release
       if: inputs.create-release
       uses: ncipollo/release-action@v1
