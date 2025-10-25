@@ -1,4 +1,4 @@
-name: Blinc Nibbs Mandate - Tag-Based Build and Publish
+name: Blinc Nuget Package Build and Publish
 
 on:
   workflow_call:
