@@ -101,10 +101,7 @@ jobs:
             dotnet pack "$project" \
               --configuration Release \
               --no-build \
-              --no-restore \                                              
               -p:PackageVersion='${{ steps.extract-version.outputs.version }}' \
-              -p:Version='${{ steps.extract-version.outputs.version }}' \
-              -p:IncludeReferencedProjects=true \
               --output ./nupkg
           fi
         done
@@ -153,5 +150,3 @@ jobs:
         generateReleaseNotes: true
         draft: false
         prerelease: false
-
-
