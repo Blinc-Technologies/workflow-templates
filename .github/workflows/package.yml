@@ -101,11 +101,18 @@ jobs:
             dotnet pack "$project" \
               --configuration Release \
               --no-build \
+              --no-restore \
               -p:PackageVersion='${{ steps.extract-version.outputs.version }}' \
+              -p:Version='${{ steps.extract-version.outputs.version }}' \
               --output ./nupkg
           fi
         done
-    
+    - name: Inspect package contents
+      run: |
+        for nupkg in ./nupkg/*.nupkg; do
+          echo "Inspecting: $nupkg"
+          unzip -l "$nupkg" | grep -i "Models" || echo "No Models found in package"
+        done
     - name: List packed files
       run: ls -la ./nupkg/
     
