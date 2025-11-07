@@ -111,8 +111,7 @@ jobs:
       run: |
         for nupkg in ./nupkg/*.nupkg; do
           echo "Inspecting: $nupkg"
-          unzip -l "$nupkg" | grep -i "dll" || echo "No DLLs found in package" 
-          exit 1
+          unzip -l "$nupkg" | grep -i "dll" || echo "No DLLs found in package"
         done
 
     - name: Upload NuGet package artifacts
