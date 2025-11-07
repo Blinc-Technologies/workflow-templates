@@ -100,22 +100,21 @@ jobs:
             echo "Packing: $project"
             dotnet pack "$project" \
               --configuration Release \
-              --no-build \
               --no-restore \
               -p:PackageVersion='${{ steps.extract-version.outputs.version }}' \
               -p:Version='${{ steps.extract-version.outputs.version }}' \
               --output ./nupkg
           fi
         done
+    
     - name: Inspect package contents
       run: |
         for nupkg in ./nupkg/*.nupkg; do
           echo "Inspecting: $nupkg"
-          unzip -l "$nupkg" | grep -i "Models" || echo "No Models found in package"
+          unzip -l "$nupkg" | grep -i "dll" || echo "No DLLs found in package" 
+          exit 1
         done
-    - name: List packed files
-      run: ls -la ./nupkg/
-    
+
     - name: Upload NuGet package artifacts
       uses: actions/upload-artifact@v4
       with:
