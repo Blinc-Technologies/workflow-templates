@@ -35,7 +35,7 @@ on:
       registry_password:
         description: "Registry password or token"
         required: false
-      github_token:
+      packages_token:
         description: "GitHub token for package authentication"
         required: false
 
@@ -96,12 +96,12 @@ jobs:
           BUILD_ARGS="${{ inputs.build_args }}"
           
           # Add GitHub credentials if token is provided
-          if [[ -n "${{ secrets.github_token }}" ]]; then
+          if [[ -n "${{ secrets.packages_token }}" ]]; then
             USERNAME="${{ inputs.github_username }}"
             if [[ -z "$USERNAME" ]]; then
               USERNAME="${{ github.actor }}"
             fi
-            BUILD_ARGS="${BUILD_ARGS}"$'\n'"GITHUB_USERNAME=${USERNAME}"$'\n'"GITHUB_TOKEN=${{ secrets.github_token }}"
+            BUILD_ARGS="${BUILD_ARGS}"$'\n'"GITHUB_USERNAME=${USERNAME}"$'\n'"GITHUB_TOKEN=${{ secrets.packages_token }}"
           fi
           
           # Output in a format safe for multiline
