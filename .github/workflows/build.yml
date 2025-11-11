@@ -94,18 +94,21 @@ jobs:
         id: build-args
         run: |
           BUILD_ARGS="${{ inputs.build_args }}"
-          
+
           # Add GitHub credentials if token is provided
           if [[ -n "${{ secrets.packages_token }}" ]]; then
-            if [[ -n "${{ inputs.github_username }}" ]]; then
-              USERNAME="${{ inputs.github_username }}"
+            
+            USERNAME="$(echo "${{ inputs.github_username }}" | xargs)"
+
+            if [[ -n "$USERNAME" ]]; then
+              BUILD_USERNAME="$USERNAME"
             else
-              USERNAME="${{ github.actor }}"
+              BUILD_USERNAME="${{ github.actor }}"
             fi
-            BUILD_ARGS="${BUILD_ARGS}"$'\n'"GITHUB_USERNAME=${USERNAME}"$'\n'"GITHUB_TOKEN=${{ secrets.packages_token }}"
+
+            BUILD_ARGS="${BUILD_ARGS}"$'\n'"GITHUB_USERNAME=$BUILD_USERNAME"$'\n'"GITHUB_TOKEN=${{ secrets.packages_token }}"
           fi
-          
-          # Output in a format safe for multiline
+
           echo "args<<EOF" >> $GITHUB_OUTPUT
           echo "$BUILD_ARGS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
