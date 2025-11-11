@@ -24,12 +24,19 @@ on:
         description: "Optional build arguments in KEY=VALUE format, separated by newlines"
         required: false
         type: string
+      github_username:
+        description: "GitHub username for package authentication"
+        required: false
+        type: string
     secrets:
       registry_username:
         description: "Registry username"
         required: false
       registry_password:
         description: "Registry password or token"
+        required: false
+      github_token:
+        description: "GitHub token for package authentication"
         required: false
 
 jobs:
@@ -83,6 +90,25 @@ jobs:
             image=moby/buildkit:latest
             network=host
 
+      - name: Prepare build args
+        id: build-args
+        run: |
+          BUILD_ARGS="${{ inputs.build_args }}"
+          
+          # Add GitHub credentials if token is provided
+          if [[ -n "${{ secrets.github_token }}" ]]; then
+            USERNAME="${{ inputs.github_username }}"
+            if [[ -z "$USERNAME" ]]; then
+              USERNAME="${{ github.actor }}"
+            fi
+            BUILD_ARGS="${BUILD_ARGS}"$'\n'"GITHUB_USERNAME=${USERNAME}"$'\n'"GITHUB_TOKEN=${{ secrets.github_token }}"
+          fi
+          
+          # Output in a format safe for multiline
+          echo "args<<EOF" >> $GITHUB_OUTPUT
+          echo "$BUILD_ARGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
@@ -93,7 +119,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
-          build-args: ${{ inputs.build_args }}
+          build-args: ${{ steps.build-args.outputs.args }}
 
       - name: Generate metadata
         if: needs.prepare.outputs.should_release == 'true'
