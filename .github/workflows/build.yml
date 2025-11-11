@@ -20,6 +20,10 @@ on:
         required: false
         default: "false"
         type: string
+      build_args:
+        description: "Optional build arguments in KEY=VALUE format, separated by newlines"
+        required: false
+        type: string
     secrets:
       registry_username:
         description: "Registry username"
@@ -89,6 +93,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
+          build-args: ${{ inputs.build_args }}
 
       - name: Generate metadata
         if: needs.prepare.outputs.should_release == 'true'
@@ -138,4 +143,4 @@ jobs:
         uses: geekyeggo/delete-artifact@v5
         with:
           name: metadata-*
-          failOnError: false       
+          failOnError: false
