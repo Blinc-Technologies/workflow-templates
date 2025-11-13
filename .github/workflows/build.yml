@@ -123,6 +123,7 @@ jobs:
           build-args: |
             ${{ steps.build-args.outputs.custom_args }}
             ${{ steps.build-args.outputs.has_github_token == 'true' && format('GITHUB_USERNAME={0}', steps.build-args.outputs.github_username) || '' }}
+          secrets: |
             ${{ steps.build-args.outputs.has_github_token == 'true' && format('GITHUB_TOKEN={0}', secrets.packages_token) || '' }}
 
       - name: Generate metadata
