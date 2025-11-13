@@ -90,24 +90,24 @@ jobs:
             image=moby/buildkit:latest
             network=host
 
-      - name: Prepare build args
-        id: build-args
+      - name: Prepare Docker inputs
+        id: docker-inputs
         run: |
-          # Determine GitHub username if token is provided
-          if [[ -n "${{ secrets.packages_token }}" ]]; then
-            USERNAME="${{ inputs.github_username }}"
-            if [[ -z "$USERNAME" ]]; then
-              USERNAME="${{ github.actor }}"
-            fi
-            echo "github_username=$USERNAME" >> $GITHUB_OUTPUT
-            echo "has_github_token=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_github_token=false" >> $GITHUB_OUTPUT
+          BUILD_ARGS="${{ inputs.build_args }}"
+          SECRETS=""
+          
+          if [[ "${{ steps.build-args.outputs.has_github_token }}" == "true" ]]; then
+            BUILD_ARGS="${BUILD_ARGS}
+          GITHUB_USERNAME=${{ steps.build-args.outputs.github_username }}"
+            SECRETS="github_token=${{ secrets.packages_token }}"
           fi
-
-          # Pass through custom build args
-          echo "custom_args<<EOF" >> $GITHUB_OUTPUT
-          echo "${{ inputs.build_args }}" >> $GITHUB_OUTPUT
+          
+          echo "build_args<<EOF" >> $GITHUB_OUTPUT
+          echo "$BUILD_ARGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "secrets<<EOF" >> $GITHUB_OUTPUT
+          echo "$SECRETS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Build and push
@@ -120,12 +120,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
-          build-args: |
-            ${{ steps.build-args.outputs.custom_args }}
-            ${{ steps.build-args.outputs.has_github_token == 'true' && format('GITHUB_USERNAME={0}', steps.build-args.outputs.github_username) || '' }}
-          secrets: |
-            ${{ steps.build-args.outputs.has_github_token == 'true' && format('github_token={0}', secrets.packages_token) || '' }}
-
+          build-args: ${{ steps.docker-inputs.outputs.build_args }}
+          secrets: ${{ steps.docker-inputs.outputs.secrets }}
+      
       - name: Generate metadata
         if: needs.prepare.outputs.should_release == 'true'
         run: |
