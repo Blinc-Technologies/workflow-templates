@@ -93,24 +93,21 @@ jobs:
       - name: Prepare build args
         id: build-args
         run: |
-          BUILD_ARGS="${{ inputs.build_args }}"
-
-          # Add GitHub credentials if token is provided
+          # Determine GitHub username if token is provided
           if [[ -n "${{ secrets.packages_token }}" ]]; then
-            
-            USERNAME="$(echo "${{ inputs.github_username }}" | xargs)"
-
-            if [[ -n "$USERNAME" ]]; then
-              BUILD_USERNAME="$USERNAME"
-            else
-              BUILD_USERNAME="${{ github.actor }}"
+            USERNAME="${{ inputs.github_username }}"
+            if [[ -z "$USERNAME" ]]; then
+              USERNAME="${{ github.actor }}"
             fi
-
-            BUILD_ARGS="${BUILD_ARGS}"$'\n'"GITHUB_USERNAME=$BUILD_USERNAME"$'\n'"GITHUB_TOKEN=${{ secrets.packages_token }}"
+            echo "github_username=$USERNAME" >> $GITHUB_OUTPUT
+            echo "has_github_token=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_github_token=false" >> $GITHUB_OUTPUT
           fi
 
-          echo "args<<EOF" >> $GITHUB_OUTPUT
-          echo "$BUILD_ARGS" >> $GITHUB_OUTPUT
+          # Pass through custom build args
+          echo "custom_args<<EOF" >> $GITHUB_OUTPUT
+          echo "${{ inputs.build_args }}" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Build and push
@@ -123,7 +120,10 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
-          build-args: ${{ steps.build-args.outputs.args }}
+          build-args: |
+            ${{ steps.build-args.outputs.custom_args }}
+            ${{ steps.build-args.outputs.has_github_token == 'true' && format('GITHUB_USERNAME={0}', steps.build-args.outputs.github_username) || '' }}
+            ${{ steps.build-args.outputs.has_github_token == 'true' && format('GITHUB_TOKEN={0}', secrets.packages_token) || '' }}
 
       - name: Generate metadata
         if: needs.prepare.outputs.should_release == 'true'
