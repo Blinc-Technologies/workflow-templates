@@ -124,7 +124,7 @@ jobs:
             ${{ steps.build-args.outputs.custom_args }}
             ${{ steps.build-args.outputs.has_github_token == 'true' && format('GITHUB_USERNAME={0}', steps.build-args.outputs.github_username) || '' }}
           secrets: |
-            ${{ steps.build-args.outputs.has_github_token == 'true' && format('GITHUB_TOKEN={0}', secrets.packages_token) || '' }}
+            ${{ steps.build-args.outputs.has_github_token == 'true' && format('github_token={0}', secrets.packages_token) || '' }}
 
       - name: Generate metadata
         if: needs.prepare.outputs.should_release == 'true'
