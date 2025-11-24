@@ -16,6 +16,11 @@ on:
         required: false
         type: string
         default: '8.0.x'
+      runner_label:
+        description: "Runner label to use (default: ubuntu-latest for GitHub-hosted)"
+        required: false
+        type: string
+        default: "ubuntu-latest"
       run-tests:
         description: 'Whether to run tests'
         required: false
@@ -33,7 +38,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     
     permissions:
       contents: read
@@ -122,7 +127,7 @@ jobs:
         retention-days: 7
 
   release:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     needs: build
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     

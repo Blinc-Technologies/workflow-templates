@@ -48,6 +48,11 @@ on:
         required: false
         type: string
         description: 'Branch of workflow run'
+      runner_label:
+        description: "Runner label to use (default: ubuntu-latest for GitHub-hosted)"
+        required: false
+        type: string
+        default: "ubuntu-latest"
     secrets:
       gh_actions_token:
         required: true
@@ -60,7 +65,7 @@ env:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     environment: ${{ inputs.environment || 'test' }}
     if: >
       inputs.trigger_type == 'workflow_dispatch' ||
