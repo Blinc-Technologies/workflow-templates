@@ -28,6 +28,11 @@ on:
         description: "GitHub username for package authentication"
         required: false
         type: string
+      runner_label:
+        description: "Runner label to use (default: ubuntu-latest for GitHub-hosted)"
+        required: false
+        type: string
+        default: "ubuntu-latest"
     secrets:
       registry_username:
         description: "Registry username"
@@ -41,7 +46,7 @@ on:
 
 jobs:
   prepare:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     outputs:
       matrix: ${{ steps.matrix.outputs.value }}
       should_release: ${{ steps.release.outputs.value }}
@@ -74,7 +79,7 @@ jobs:
   build:
     needs: prepare
     if: needs.prepare.outputs.matrix != '{"component":[]}'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     environment: ${{ inputs.environment || 'test' }}
     strategy:
       fail-fast: false
@@ -148,7 +153,7 @@ jobs:
   artifacts-upload:
     needs: [prepare, build]
     if: needs.prepare.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     steps:
       - uses: actions/download-artifact@v4
         with:
