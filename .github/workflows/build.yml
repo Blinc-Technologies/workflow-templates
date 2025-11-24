@@ -28,6 +28,11 @@ on:
         description: "GitHub username for package authentication"
         required: false
         type: string
+      runner_label:
+        description: "Runner label to use (default: ubuntu-latest for GitHub-hosted)"
+        required: false
+        type: string
+        default: "ubuntu-latest"
     secrets:
       registry_username:
         description: "Registry username"
@@ -41,7 +46,7 @@ on:
 
 jobs:
   prepare:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     outputs:
       matrix: ${{ steps.matrix.outputs.value }}
       should_release: ${{ steps.release.outputs.value }}
@@ -74,7 +79,7 @@ jobs:
   build:
     needs: prepare
     if: needs.prepare.outputs.matrix != '{"component":[]}'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     environment: ${{ inputs.environment || 'test' }}
     strategy:
       fail-fast: false
@@ -93,24 +98,21 @@ jobs:
       - name: Prepare build args
         id: build-args
         run: |
-          BUILD_ARGS="${{ inputs.build_args }}"
-
-          # Add GitHub credentials if token is provided
+          # Determine GitHub username if token is provided
           if [[ -n "${{ secrets.packages_token }}" ]]; then
-            
-            USERNAME="$(echo "${{ inputs.github_username }}" | xargs)"
-
-            if [[ -n "$USERNAME" ]]; then
-              BUILD_USERNAME="$USERNAME"
-            else
-              BUILD_USERNAME="${{ github.actor }}"
+            USERNAME="${{ inputs.github_username }}"
+            if [[ -z "$USERNAME" ]]; then
+              USERNAME="${{ github.actor }}"
             fi
-
-            BUILD_ARGS="${BUILD_ARGS}"$'\n'"GITHUB_USERNAME=$BUILD_USERNAME"$'\n'"GITHUB_TOKEN=${{ secrets.packages_token }}"
+            echo "github_username=$USERNAME" >> $GITHUB_OUTPUT
+            echo "has_github_token=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_github_token=false" >> $GITHUB_OUTPUT
           fi
 
-          echo "args<<EOF" >> $GITHUB_OUTPUT
-          echo "$BUILD_ARGS" >> $GITHUB_OUTPUT
+          # Pass through custom build args
+          echo "custom_args<<EOF" >> $GITHUB_OUTPUT
+          echo "${{ inputs.build_args }}" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Build and push
@@ -123,7 +125,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
-          build-args: ${{ steps.build-args.outputs.args }}
+          build-args: |
+            ${{ steps.build-args.outputs.custom_args }}
+            ${{ steps.build-args.outputs.has_github_token == 'true' && format('GITHUB_USERNAME={0}', steps.build-args.outputs.github_username) || '' }}
+          secrets: |
+            ${{ steps.build-args.outputs.has_github_token == 'true' && format('github_token={0}', secrets.packages_token) || '' }}
 
       - name: Generate metadata
         if: needs.prepare.outputs.should_release == 'true'
@@ -147,7 +153,7 @@ jobs:
   artifacts-upload:
     needs: [prepare, build]
     if: needs.prepare.outputs.should_release == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     steps:
       - uses: actions/download-artifact@v4
         with:
