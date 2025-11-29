@@ -117,7 +117,7 @@ jobs:
         echo "✅ Release metadata found."
         
         # Determine components list
-        if [[ "${{ inputs.trigger_type }}" == "workflow_run" || ${{ inputs.components }} == ''  ]]; then
+        if [[ "${{ inputs.trigger_type }}" == "workflow_run" || -z "${{ inputs.components }}" ]]; then
           # Auto-detect from artifacts
           COMPONENTS=$(ls releases/*.json | xargs -n1 basename | sed 's/\.json//g' | paste -sd, -)
           echo "📦 Auto-detected components: $COMPONENTS"
