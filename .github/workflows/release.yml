@@ -83,12 +83,10 @@ jobs:
           # Auto-trigger from build → defaults
           echo "environment=test" >> $GITHUB_OUTPUT
           echo "run_id=${{ inputs.workflow_run_id }}" >> $GITHUB_OUTPUT
-          echo "auto_detect_components=true" >> $GITHUB_OUTPUT
         else
           # Manual dispatch → use provided inputs
           echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
           echo "run_id=${{ inputs.run_id }}" >> $GITHUB_OUTPUT
-          echo "auto_detect_components=false" >> $GITHUB_OUTPUT
           
           # Validate environment
           ENVIRONMENT="${{ inputs.environment }}"
@@ -119,7 +117,7 @@ jobs:
         echo "✅ Release metadata found."
         
         # Determine components list
-        if [[ "${{ steps.params.outputs.auto_detect_components }}" == "true" ]]; then
+        if [[ "${{ inputs.trigger_type }}" == "workflow_run" || ! -n "${{ inputs.components }}" ]]; then
           # Auto-detect from artifacts
           COMPONENTS=$(ls releases/*.json | xargs -n1 basename | sed 's/\.json//g' | paste -sd, -)
           echo "📦 Auto-detected components: $COMPONENTS"
