@@ -63,6 +63,10 @@ jobs:
             SHOULD_RELEASE=true
           fi
           echo "value=$SHOULD_RELEASE" >> $GITHUB_OUTPUT
+      
+      - run: |
+          echo "create_release raw: '${{ inputs.create_release }}'"
+          echo "type check done in bash"
 
       - name: Build component matrix
         id: matrix
