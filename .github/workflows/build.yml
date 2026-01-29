@@ -60,7 +60,7 @@ jobs:
           if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" =~ ^refs/heads/(main|feature/) ]]; then
             SHOULD_RELEASE=true
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            # Check release_mode: false, build_only, or build_and_deploy
+            # Check release_mode: skip, build_only, or build_and_deploy
             if [[ "${{ inputs.create_release }}" == "build_only" || "${{ inputs.create_release }}" == "build_and_deploy" ]]; then
               SHOULD_RELEASE=true
             fi

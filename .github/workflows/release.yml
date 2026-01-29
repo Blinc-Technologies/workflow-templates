@@ -109,7 +109,7 @@ jobs:
       run: |
         if ! ls releases/*.json > /dev/null 2>&1; then
           echo "❌ No release metadata found in the downloaded artifact."
-          echo "   This likely means the triggering build workflow ran with release_mode='false'."
+          echo "   This likely means the triggering build workflow ran with release_mode='skip'."
           echo "   Please trigger the build again with release_mode='build_and_deploy' or run this release workflow manually."
           exit 1
         fi

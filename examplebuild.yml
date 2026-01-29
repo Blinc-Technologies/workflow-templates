@@ -18,10 +18,10 @@ on:
       release_mode:
         required: false
         description: 'Release mode'
-        default: 'false'
+        default: 'skip'
         type: choice
         options:
-          - 'false'
+          - skip
           - build_only
           - build_and_deploy
       components_to_build:
