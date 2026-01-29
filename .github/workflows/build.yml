@@ -20,11 +20,6 @@ on:
         required: false
         default: "false"
         type: string
-      trigger_release_on_success:
-        description: "Auto-trigger release workflow when build completes successfully"
-        required: false
-        default: "false"
-        type: string
       build_args:
         description: "Optional build arguments in KEY=VALUE format, separated by newlines"
         required: false
@@ -55,7 +50,6 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.value }}
       should_release: ${{ steps.release.outputs.value }}
-      should_trigger_release: ${{ steps.trigger.outputs.value }}
     steps:
       - uses: actions/checkout@v4
 
@@ -65,19 +59,13 @@ jobs:
           SHOULD_RELEASE=false
           if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" =~ ^refs/heads/(main|feature/) ]]; then
             SHOULD_RELEASE=true
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.create_release }}" == "true" ]]; then
-            SHOULD_RELEASE=true
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # Check release_mode: false, build_only, or build_and_deploy
+            if [[ "${{ inputs.create_release }}" == "build_only" || "${{ inputs.create_release }}" == "build_and_deploy" ]]; then
+              SHOULD_RELEASE=true
+            fi
           fi
           echo "value=$SHOULD_RELEASE" >> $GITHUB_OUTPUT
-
-      - name: Determine if release should be triggered
-        id: trigger
-        run: |
-          SHOULD_TRIGGER=false
-          if [[ "${{ inputs.trigger_release_on_success }}" == "true" ]]; then
-            SHOULD_TRIGGER=true
-          fi
-          echo "value=$SHOULD_TRIGGER" >> $GITHUB_OUTPUT
 
       - name: Build component matrix
         id: matrix
@@ -149,13 +137,24 @@ jobs:
       - name: Generate metadata
         if: needs.prepare.outputs.should_release == 'true'
         run: |
+          # Determine if deployment should proceed
+          SHOULD_DEPLOY=false
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+            # Auto-deploy for main branch
+            SHOULD_DEPLOY=true
+          elif [[ "${{ inputs.create_release }}" == "build_and_deploy" ]]; then
+            # Deploy when explicitly requested
+            SHOULD_DEPLOY=true
+          fi
+          
           jq -nc \
             --arg component "${{ matrix.component }}" \
             --arg branch "${{ github.ref_name }}" \
             --arg commit "${{ github.sha }}" \
             --arg repository "${{ vars.REGISTRY_HOST }}/${{ inputs.project_name }}_${{ matrix.component }}" \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{component:$component,branch:$branch,commit:$commit,tag:$commit,repository:$repository,timestamp:$timestamp}' \
+            --argjson should_deploy "$SHOULD_DEPLOY" \
+            '{component:$component,branch:$branch,commit:$commit,tag:$commit,repository:$repository,timestamp:$timestamp,should_deploy:$should_deploy}' \
             > ${{ matrix.component }}.json
 
       - uses: actions/upload-artifact@v4

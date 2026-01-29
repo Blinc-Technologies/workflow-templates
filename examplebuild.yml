@@ -15,14 +15,15 @@ on:
           - test
           - staging
           - prod
-      should_create_release:
+      release_mode:
         required: false
-        description: 'Should create release: true | false'
+        description: 'Release mode'
         default: 'false'
-      trigger_release_on_success:
-        required: false
-        description: 'Auto-trigger release workflow on successful build: true | false'
-        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - build_only
+          - build_and_deploy
       components_to_build:
         required: false
         description: 'Optional: component(s) to build. Leave empty to use default vars.COMPONENTS_TO_BUILD'
@@ -45,7 +46,6 @@ jobs:
         ${{ github.event.inputs.components_to_build != '' 
             && github.event.inputs.components_to_build 
             || vars.COMPONENTS_TO_BUILD }}
-      create_release: ${{ github.event.inputs.should_create_release }}
-      trigger_release_on_success: ${{ github.event.inputs.trigger_release_on_success }}
+      create_release: ${{ github.event.inputs.release_mode }}
       environment: ${{ github.event.inputs.environment }}
       runner_label: ${{ github.event.inputs.runner_label}}

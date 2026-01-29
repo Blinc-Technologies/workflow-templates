@@ -107,13 +107,26 @@ jobs:
     - name: Verify release metadata and determine components
       id: components
       run: |
-        if ! ls releases/*.json >/dev/null 2>&1; then
+        if ! ls releases/*.json > /dev/null 2>&1; then
           echo "❌ No release metadata found in the downloaded artifact."
-          echo "   This likely means the triggering build workflow ran with 'should_deploy=false'."
-          echo "   Please trigger the build again with 'should_deploy=true' or run this release workflow manually pointing to a build run ID that generated artifacts."
+          echo "   This likely means the triggering build workflow ran with release_mode='false'."
+          echo "   Please trigger the build again with release_mode='build_and_deploy' or run this release workflow manually."
           exit 1
         fi
         echo "✅ Release metadata found."
+        
+        # Check if deployment should proceed
+        FIRST_METADATA=$(ls releases/*.json | head -n 1)
+        SHOULD_DEPLOY=$(jq -r '.should_deploy // true' "$FIRST_METADATA")
+        
+        if [[ "$SHOULD_DEPLOY" == "false" ]]; then
+          echo "⏭️  Deployment skipped - build was configured with release_mode='build_only'"
+          echo "   Artifacts were created but deployment was not requested."
+          echo "   To deploy these artifacts, run this release workflow manually with the same run_id."
+          exit 0
+        fi
+        
+        echo "✅ Deployment will proceed."
         
         # Determine components list
         if [[ "${{ inputs.trigger_type }}" == "workflow_run" || ! -n "${{ inputs.components }}" ]]; then
