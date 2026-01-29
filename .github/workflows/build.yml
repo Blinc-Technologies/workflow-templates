@@ -81,7 +81,7 @@ jobs:
 
   build:
     needs: prepare
-    if: needs.prepare.outputs.matrix != '{"component":[]}'
+    if: needs.prepare.outputs.matrix != '{"include":[]}'
     runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     environment: ${{ inputs.environment || 'test' }}
     strategy:
