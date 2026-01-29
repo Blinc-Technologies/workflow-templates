@@ -1,7 +1,3 @@
-# File: .github/workflows/release.yml
-# This goes in ANY repository that wants to use the reusable release workflow
-# Example: blinc-payment-service, blinc-notification-service, etc.
-
 name: Release
 
 on:
@@ -20,12 +16,20 @@ on:
           - staging
           - prod
       components:
-        required: true
-        description: 'Comma-separated list of components to deploy'
-        default: 'api, worker, scheduler'
+        required: false
+        description: 'Optional: Comma-separated list of components to deploy. Leave empty to use components from build artifacts'
+        default: ''
       run_id:
         required: true
         description: 'Run ID of the build workflow'
+      runner_label:
+        required: false
+        description: 'Runner label (default: ubuntu-latest, or use self-hosted)'
+        default: 'ubuntu-latest'
+        type: choice
+        options:
+          - ubuntu-latest
+          - self-hosted
 
 jobs:
   release:
@@ -41,6 +45,7 @@ jobs:
       project_name: ${{ vars.PROJECT_NAME }}
       namespace: ${{ vars.NAMESPACE }}
       secret_store_name: ${{ vars.SECRET_STORE_NAME }}
+      runner_label: ${{ github.event.inputs.runner_label}}
     secrets:
       gh_actions_token: ${{ secrets.GH_ACTIONS_TOKEN }}
-      gh_gitops_token: ${{ secrets.GH_GITOPS_TOKEN }}
+      gh_gitops_token: ${{ secrets.GH_ACTIONS_TOKEN }}

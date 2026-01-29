@@ -71,8 +71,7 @@ jobs:
       inputs.trigger_type == 'workflow_dispatch' ||
       (
         inputs.trigger_type == 'workflow_run' && 
-        inputs.workflow_run_conclusion == 'success' && 
-        inputs.workflow_run_branch == 'main'
+        inputs.workflow_run_conclusion == 'success'
       )
   
     steps:

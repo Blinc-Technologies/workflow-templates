@@ -20,6 +20,11 @@ on:
         required: false
         default: "false"
         type: string
+      trigger_release_on_success:
+        description: "Auto-trigger release workflow when build completes successfully"
+        required: false
+        default: "false"
+        type: string
       build_args:
         description: "Optional build arguments in KEY=VALUE format, separated by newlines"
         required: false
@@ -50,6 +55,7 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.value }}
       should_release: ${{ steps.release.outputs.value }}
+      should_trigger_release: ${{ steps.trigger.outputs.value }}
     steps:
       - uses: actions/checkout@v4
 
@@ -63,6 +69,15 @@ jobs:
             SHOULD_RELEASE=true
           fi
           echo "value=$SHOULD_RELEASE" >> $GITHUB_OUTPUT
+
+      - name: Determine if release should be triggered
+        id: trigger
+        run: |
+          SHOULD_TRIGGER=false
+          if [[ "${{ inputs.trigger_release_on_success }}" == "true" ]]; then
+            SHOULD_TRIGGER=true
+          fi
+          echo "value=$SHOULD_TRIGGER" >> $GITHUB_OUTPUT
 
       - name: Build component matrix
         id: matrix

@@ -1,0 +1,51 @@
+name: Build
+
+on:
+  push:
+    branches: 
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        required: true
+        description: 'test | staging | prod'
+        default: 'test'
+        type: choice
+        options:
+          - test
+          - staging
+          - prod
+      should_create_release:
+        required: false
+        description: 'Should create release: true | false'
+        default: 'false'
+      trigger_release_on_success:
+        required: false
+        description: 'Auto-trigger release workflow on successful build: true | false'
+        default: 'false'
+      components_to_build:
+        required: false
+        description: 'Optional: component(s) to build. Leave empty to use default vars.COMPONENTS_TO_BUILD'
+        default: '' 
+      runner_label:
+        required: false
+        description: 'Runner label (default: ubuntu-latest, or use self-hosted)'
+        default: 'ubuntu-latest'
+        type: choice
+        options:
+          - ubuntu-latest
+          - self-hosted
+
+jobs:
+  build:
+    uses: Blinc-Technologies/workflow-templates/.github/workflows/build.yml@main
+    with:
+      project_name: ${{ vars.PROJECT_NAME }}
+      components_to_build: >-
+        ${{ github.event.inputs.components_to_build != '' 
+            && github.event.inputs.components_to_build 
+            || vars.COMPONENTS_TO_BUILD }}
+      create_release: ${{ github.event.inputs.should_create_release }}
+      trigger_release_on_success: ${{ github.event.inputs.trigger_release_on_success }}
+      environment: ${{ github.event.inputs.environment }}
+      runner_label: ${{ github.event.inputs.runner_label}}
