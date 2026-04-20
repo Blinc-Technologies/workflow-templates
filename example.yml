@@ -44,3 +44,21 @@ jobs:
     secrets:
       gh_actions_token: ${{ secrets.GH_ACTIONS_TOKEN }}
       gh_gitops_token: ${{ secrets.GH_GITOPS_TOKEN }}
+
+# ────────────────────────────────────────────────────────────
+# Example Build workflow for a mixed backend + frontend repo:
+#
+# File: .github/workflows/build.yml
+#
+#   jobs:
+#     build:
+#       uses: Blinc-Technologies/workflow-templates/.github/workflows/build.yml@main
+#       with:
+#         project_name: ${{ vars.PROJECT_NAME }}
+#         components_to_build: 'api, worker, web'
+#         create_release: ${{ inputs.create_release || 'false' }}
+#         frontend_env: ${{ vars.FRONTEND_ENV_FILE }}
+#       secrets:
+#         registry_username: ${{ secrets.REGISTRY_USERNAME }}
+#         registry_password: ${{ secrets.REGISTRY_PASSWORD }}
+# ────────────────────────────────────────────────────────────

@@ -1,0 +1,48 @@
+
+name: Build
+
+on:
+  push:
+    branches: [main, 'feature/**']
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create release artifacts'
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  build:
+    uses: Blinc-Technologies/workflow-templates/.github/workflows/build.yml@main
+    with:
+      project_name: ${{ vars.PROJECT_NAME }}
+      components_to_build: 'web'
+      create_release: ${{ inputs.create_release || 'false' }}
+      frontend_env: ${{ vars.FRONTEND_ENV_FILE }}
+    secrets:
+      registry_username: ${{ secrets.REGISTRY_USERNAME }}
+      registry_password: ${{ secrets.REGISTRY_PASSWORD }}
+
+# ─── Release Workflow (.github/workflows/release.yml) ──────
+# Same as the backend example — no changes needed.
+#
+# jobs:
+#   release:
+#     uses: Blinc-Technologies/workflow-templates/.github/workflows/release.yml@main
+#     with:
+#       environment: ${{ inputs.environment }}
+#       components: ${{ inputs.components }}
+#       run_id: ${{ inputs.run_id }}
+#       trigger_type: ${{ github.event_name }}
+#       workflow_run_id: ${{ github.event.workflow_run.id }}
+#       workflow_run_conclusion: ${{ github.event.workflow_run.conclusion }}
+#       workflow_run_branch: ${{ github.event.workflow_run.head_branch }}
+#       project_name: ${{ vars.PROJECT_NAME }}
+#       namespace: ${{ vars.NAMESPACE }}
+#       secret_store_name: ${{ vars.SECRET_STORE_NAME }}
+#     secrets:
+#       gh_actions_token: ${{ secrets.GH_ACTIONS_TOKEN }}
+#       gh_gitops_token: ${{ secrets.GH_GITOPS_TOKEN }}
