@@ -230,7 +230,9 @@ jobs:
             yq eval ".branch = \"$BRANCH\"" -i "$VALUES_FILE"
             yq eval ".commit = \"$COMMIT_SHA\"" -i "$VALUES_FILE"
             yq eval ".env.ENVIRONMENT = \"$ENV_NAME\"" -i "$VALUES_FILE"
-            yq eval ".externalSecret.forceUpdateAnnotation = \"${COMMIT_SHA}-v1\"" -i "$VALUES_FILE"
+            if [[ "$COMPONENT" != "web" ]]; then
+              yq eval ".externalSecret.forceUpdateAnnotation = \"${COMMIT_SHA}-v1\"" -i "$VALUES_FILE"
+            fi
             
           else
             echo "✨ Creating new values.yml for $COMPONENT"
@@ -248,9 +250,11 @@ jobs:
               echo "commit: $COMMIT_SHA"
               echo "env:"
               echo "  ENVIRONMENT: $ENV_NAME"
-              echo "externalSecret:"
-              echo "  enabled: true"
-              echo "  forceUpdateAnnotation: ${COMMIT_SHA}-v1"
+              if [[ "$COMPONENT" != "web" ]]; then
+                echo "externalSecret:"
+                echo "  enabled: true"
+                echo "  forceUpdateAnnotation: ${COMMIT_SHA}-v1"
+              fi
               echo "replicaCount: 1"
               echo "podLabels: {}"
               echo "addDaprSidecar: false"
