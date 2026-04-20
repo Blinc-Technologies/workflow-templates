@@ -191,7 +191,7 @@ jobs:
             echo "✅ Deploying $COMPONENT with tag $TAG"
 
             if [[ "$COMPONENT" == "web" ]]; then
-              DEST="${{ env.GITOPS_REPO_PATH }}/web/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}"
+              DEST="${{ env.GITOPS_REPO_PATH }}/web/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}/$COMPONENT"
             else
               DEST="${{ env.GITOPS_REPO_PATH }}/microservices/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}/$COMPONENT"
             fi
