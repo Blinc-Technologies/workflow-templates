@@ -172,10 +172,88 @@ jobs:
 
       - name: Generate or Update GitOps manifests
         run: |
+          write_new_values() {
+            local VALUES_FILE="$1" REPOSITORY="$2" TAG="$3" COMPONENT="$4"
+            local COMMIT_SHA="$5" BRANCH="$6" ENV_NAME="$7" INSTANCE_NAME="${8:-}"
+            {
+              echo "image:"
+              echo "  repository: $REPOSITORY"
+              echo "  tag: $TAG"
+              echo "projectName: ${{ inputs.project_name }}"
+              echo "componentName: $COMPONENT"
+              echo "instanceName: $INSTANCE_NAME"
+              echo "namespace: ${{ vars.NAMESPACE }}"
+              echo "releaseId: $COMMIT_SHA"
+              echo "branch: $BRANCH"
+              echo "commit: $COMMIT_SHA"
+              echo "env:"
+              echo "  ENVIRONMENT: $ENV_NAME"
+              if [[ "$COMPONENT" != "web" ]]; then
+                echo "externalSecret:"
+                echo "  enabled: true"
+                echo "  forceUpdateAnnotation: ${COMMIT_SHA}-v1"
+              fi
+              echo "replicaCount: 1"
+              echo "podLabels: {}"
+              echo "addDaprSidecar: false"
+              echo "podAnnotations: {}"
+              echo "livenessProbe:"
+              echo "  enabled: true"
+              echo "readinessProbe:"
+              echo "  enabled: true"
+              echo "volumeMounts: []"
+              echo "volumes: []"
+              echo "service:"
+              echo "  enabled: true"
+              echo "  type: ClusterIP"
+              echo "isGrpc: false"
+              echo "autoscaling:"
+              echo "  enabled: false"
+            } > "$VALUES_FILE"
+          }
+
+          update_values() {
+            local VALUES_FILE="$1" REPOSITORY="$2" TAG="$3"
+            local COMMIT_SHA="$4" BRANCH="$5" ENV_NAME="$6" COMPONENT="$7"
+            yq eval ".image.repository = \"$REPOSITORY\""           -i "$VALUES_FILE"
+            yq eval ".image.tag = \"$TAG\""                         -i "$VALUES_FILE"
+            yq eval ".releaseId = \"$COMMIT_SHA\""                  -i "$VALUES_FILE"
+            yq eval ".branch = \"$BRANCH\""                         -i "$VALUES_FILE"
+            yq eval ".commit = \"$COMMIT_SHA\""                     -i "$VALUES_FILE"
+            yq eval ".env.ENVIRONMENT = \"$ENV_NAME\""              -i "$VALUES_FILE"
+            if [[ "$COMPONENT" != "web" ]]; then
+              yq eval ".externalSecret.forceUpdateAnnotation = \"${COMMIT_SHA}-v1\"" -i "$VALUES_FILE"
+            fi
+          }
+
+          deploy_instance() {
+            local COMPONENT="$1" TAG="$2" REPOSITORY="$3" BRANCH="$4"
+            local COMMIT_SHA="$5" ENV_NAME="$6" INSTANCE_FOLDER="$7"
+
+            local BASE
+            if [[ "$COMPONENT" == "web" ]]; then
+              BASE="${{ env.GITOPS_REPO_PATH }}/web/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}/$INSTANCE_FOLDER"
+            else
+              BASE="${{ env.GITOPS_REPO_PATH }}/microservices/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}/$INSTANCE_FOLDER"
+            fi
+
+            local VALUES_FILE="$BASE/values.yml"
+            mkdir -p "$BASE"
+
+            if [[ -f "$VALUES_FILE" ]]; then
+              echo "📝 Updating existing values.yml for $INSTANCE_FOLDER"
+              update_values "$VALUES_FILE" "$REPOSITORY" "$TAG" "$COMMIT_SHA" "$BRANCH" "$ENV_NAME" "$COMPONENT"
+            else
+              echo "✨ Creating new values.yml for $INSTANCE_FOLDER"
+              write_new_values "$VALUES_FILE" "$REPOSITORY" "$TAG" "$COMPONENT" "$COMMIT_SHA" "$BRANCH" "$ENV_NAME" "$INSTANCE_FOLDER"
+            fi
+          }
+
+          # ── main loop ─────────────────────────────────────────────────────
           IFS=',' read -ra COMPONENTS <<< "${{ steps.components.outputs.components }}"
           for COMPONENT in "${COMPONENTS[@]}"; do
             COMPONENT=$(echo "$COMPONENT" | xargs)
-            echo "🔍 Processing $COMPONENT"
+            echo "🔍 Processing component: $COMPONENT"
 
             METADATA_FILE="releases/$COMPONENT.json"
             if [[ ! -f "$METADATA_FILE" ]]; then
@@ -183,20 +261,10 @@ jobs:
               exit 1
             fi
 
-            TAG=$(jq -r .tag "$METADATA_FILE")
+            TAG=$(jq -r .tag               "$METADATA_FILE")
             REPOSITORY=$(jq -r .repository "$METADATA_FILE")
-            BRANCH=$(jq -r .branch "$METADATA_FILE")
-            COMMIT_SHA=$(jq -r .commit "$METADATA_FILE")
-
-            echo "✅ Deploying $COMPONENT with tag $TAG"
-
-            if [[ "$COMPONENT" == "web" ]]; then
-              DEST="${{ env.GITOPS_REPO_PATH }}/web/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}/$COMPONENT"
-            else
-              DEST="${{ env.GITOPS_REPO_PATH }}/microservices/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}/$COMPONENT"
-            fi
-            VALUES_FILE="$DEST/values.yml"
-            mkdir -p "$DEST"
+            BRANCH=$(jq -r .branch         "$METADATA_FILE")
+            COMMIT_SHA=$(jq -r .commit     "$METADATA_FILE")
 
             case "${{ steps.env.outputs.environment }}" in
               "prod")    ENV_NAME="Production" ;;
@@ -204,55 +272,38 @@ jobs:
               *)         ENV_NAME="Test" ;;
             esac
 
-            if [[ -f "$VALUES_FILE" ]]; then
-              echo "📝 Updating existing values.yml for $COMPONENT"
-
-              yq eval ".image.repository = \"$REPOSITORY\"" -i "$VALUES_FILE"
-              yq eval ".image.tag = \"$TAG\"" -i "$VALUES_FILE"
-              yq eval ".releaseId = \"$COMMIT_SHA\"" -i "$VALUES_FILE"
-              yq eval ".branch = \"$BRANCH\"" -i "$VALUES_FILE"
-              yq eval ".commit = \"$COMMIT_SHA\"" -i "$VALUES_FILE"
-              yq eval ".env.ENVIRONMENT = \"$ENV_NAME\"" -i "$VALUES_FILE"
-              if [[ "$COMPONENT" != "web" ]]; then
-                yq eval ".externalSecret.forceUpdateAnnotation = \"${COMMIT_SHA}-v1\"" -i "$VALUES_FILE"
-              fi
+            # ── Discover instances from GitOps repo ────────────────────────
+            # Convention: an instance folder belongs to a component if its name
+            # either equals the component exactly  (e.g. issuer)
+            # or ends with  -<component>            (e.g. fcmb-issuer, kuda-issuer)
+            #
+            # This keeps the structure flat at microservices/test/<project>/<folder>
+            # so every folder is picked up by the AppSet glob: microservices/test/*/*
+            #
+            # To add a new instance: create the folder + values.yml in the GitOps repo.
+            # To remove an instance: delete the folder from the GitOps repo.
+            # ──────────────────────────────────────────────────────────────
+            if [[ "$COMPONENT" == "web" ]]; then
+              PROJECT_BASE="${{ env.GITOPS_REPO_PATH }}/web/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}"
             else
-              echo "✨ Creating new values.yml for $COMPONENT"
+              PROJECT_BASE="${{ env.GITOPS_REPO_PATH }}/microservices/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}"
+            fi
 
-              {
-                echo "image:"
-                echo "  repository: $REPOSITORY"
-                echo "  tag: $TAG"
-                echo "projectName: ${{ inputs.project_name }}"
-                echo "componentName: $COMPONENT"
-                echo "namespace: ${{ vars.NAMESPACE }}"
-                echo "releaseId: $COMMIT_SHA"
-                echo "branch: $BRANCH"
-                echo "commit: $COMMIT_SHA"
-                echo "env:"
-                echo "  ENVIRONMENT: $ENV_NAME"
-                if [[ "$COMPONENT" != "web" ]]; then
-                  echo "externalSecret:"
-                  echo "  enabled: true"
-                  echo "  forceUpdateAnnotation: ${COMMIT_SHA}-v1"
-                fi
-                echo "replicaCount: 1"
-                echo "podLabels: {}"
-                echo "addDaprSidecar: false"
-                echo "podAnnotations: {}"
-                echo "livenessProbe:"
-                echo "  enabled: true"
-                echo "readinessProbe:"
-                echo "  enabled: true"
-                echo "volumeMounts: []"
-                echo "volumes: []"
-                echo "service:"
-                echo "  enabled: true"
-                echo "  type: ClusterIP"
-                echo "isGrpc: false"
-                echo "autoscaling:"
-                echo "  enabled: false"
-              } > "$VALUES_FILE"
+            # Match folders named exactly <component> or ending with -<component>
+            INSTANCE_DIRS=$(find "$PROJECT_BASE" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
+              | grep -E "(^|/)${COMPONENT}$|(^|/)[^/]+-${COMPONENT}$" \
+              | sort)
+
+            if [[ -z "$INSTANCE_DIRS" ]]; then
+              echo "✅ No existing instances found for $COMPONENT — deploying as base instance"
+              deploy_instance "$COMPONENT" "$TAG" "$REPOSITORY" "$BRANCH" "$COMMIT_SHA" "$ENV_NAME" "$COMPONENT"
+            else
+              echo "📂 Instances found for $COMPONENT: $(echo "$INSTANCE_DIRS" | xargs -n1 basename | paste -sd', ' -)"
+              while IFS= read -r INSTANCE_PATH; do
+                INSTANCE_FOLDER=$(basename "$INSTANCE_PATH")
+                echo "✅ Deploying $INSTANCE_FOLDER (component=$COMPONENT) tag=$TAG"
+                deploy_instance "$COMPONENT" "$TAG" "$REPOSITORY" "$BRANCH" "$COMMIT_SHA" "$ENV_NAME" "$INSTANCE_FOLDER"
+              done <<< "$INSTANCE_DIRS"
             fi
           done
 
