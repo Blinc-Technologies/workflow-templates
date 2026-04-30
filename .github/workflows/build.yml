@@ -51,7 +51,7 @@ jobs:
       matrix: ${{ steps.matrix.outputs.value }}
       should_release: ${{ steps.release.outputs.value }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Determine release strategy
         id: release
@@ -98,7 +98,7 @@ jobs:
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Create frontend .env file
         if: vars.ENV_VARS != '' && matrix.component == 'web'
@@ -106,7 +106,7 @@ jobs:
           echo "${{ vars.ENV_VARS }}" > .env
           echo "✅ .env file created for frontend build"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
         with:
           driver-opts: |
             image=moby/buildkit:latest
@@ -133,7 +133,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Build and push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.path }}/Dockerfile
@@ -160,7 +160,7 @@ jobs:
             '{component:$component,branch:$branch,commit:$commit,tag:$commit,repository:$repository,timestamp:$timestamp}' \
             > ${{ matrix.component }}.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: needs.prepare.outputs.should_release == 'true'
         with:
           name: metadata-${{ matrix.component }}
@@ -172,7 +172,7 @@ jobs:
     if: needs.prepare.outputs.should_release == 'true'
     runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: metadata
 
@@ -186,14 +186,14 @@ jobs:
           # Clean up empty subdirs
           find metadata -type d -empty -delete
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-artifacts
           path: metadata
           retention-days: 90
 
       - name: Delete temporary artifacts
-        uses: geekyeggo/delete-artifact@v5
+        uses: geekyeggo/delete-artifact@v6
         with:
           name: metadata-*
           failOnError: false
