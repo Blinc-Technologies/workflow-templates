@@ -57,7 +57,7 @@ jobs:
         id: release
         run: |
           SHOULD_RELEASE=false
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" =~ ^refs/heads/(main|feature/) ]]; then
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" =~ ^refs/heads/(main|master) ]]; then
             SHOULD_RELEASE=true
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.create_release }}" == "true" ]]; then
             SHOULD_RELEASE=true
