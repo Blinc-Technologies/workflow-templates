@@ -78,14 +78,26 @@ jobs:
             while IFS= read -r dir; do
               component=$(basename "$dir" | sed 's/.*\.//' | tr '[:upper:]' '[:lower:]')
               if [[ "${{ inputs.components_to_build }}" == *"$component"* ]]; then
-                components=$(jq -c --arg c "$component" --arg p "$dir" '. += [{"component":$c,"path":$p}]' <<< "$components")
+                components=$(jq -c --arg c "$component" --arg p "$dir" '. += [{"component":$c,"path":$p,"type":"service"}]' <<< "$components")
               fi
             done < <(find src -maxdepth 1 -mindepth 1 -type d -exec test -f {}/Dockerfile \; -print)
           fi
 
+          # Scan apps/ subdirectories for standalone frontend components in a monorepo
+          # (e.g. apps/partner-dashboard/Dockerfile). Component name = folder name, verbatim.
+          if [ -d "apps" ]; then
+            while IFS= read -r dir; do
+              component=$(basename "$dir")
+              if [[ "${{ inputs.components_to_build }}" == *"$component"* ]]; then
+                components=$(jq -c --arg c "$component" --arg p "$dir" '. += [{"component":$c,"path":$p,"type":"web"}]' <<< "$components")
+                echo "📦 Added apps/$component web component"
+              fi
+            done < <(find apps -maxdepth 1 -mindepth 1 -type d -exec test -f {}/Dockerfile \; -print)
+          fi
+
           # Check for root-level Dockerfile (frontend/web component)
           if [[ -f "Dockerfile" && "${{ inputs.components_to_build }}" == *"web"* ]]; then
-            components=$(jq -c '. += [{"component":"web","path":"."}]' <<< "$components")
+            components=$(jq -c '. += [{"component":"web","path":".","type":"web"}]' <<< "$components")
             echo "📦 Added root-level web component"
           fi
 
@@ -102,13 +114,20 @@ jobs:
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+
+      - name: Resolve frontend env vars key
+        id: env-key
+        if: matrix.type == 'web'
+        run: |
+          KEY=$(echo "${{ matrix.component }}" | tr '[:lower:]-' '[:upper:]_')
+          echo "name=ENV_VARS_${KEY}" >> "$GITHUB_OUTPUT"
 
       - name: Create frontend .env file
-        if: inputs.frontend_env != '' && matrix.component == 'web'
+        if: matrix.type == 'web' && (vars[steps.env-key.outputs.name] != '' || vars.ENV_VARS != '')
         run: |
-          echo "${{ inputs.frontend_env }}" > .env
-          echo "✅ .env file created for frontend build"
+          echo "${{ vars[steps.env-key.outputs.name] || vars.ENV_VARS }}" > "${{ matrix.path }}/.env"
+          echo "✅ .env file created for frontend build (${{ matrix.component }})"
 
       - uses: docker/setup-buildx-action@v3
         with:
@@ -157,11 +176,12 @@ jobs:
         run: |
           jq -nc \
             --arg component "${{ matrix.component }}" \
+            --arg type "${{ matrix.type }}" \
             --arg branch "${{ github.ref_name }}" \
             --arg commit "${{ github.sha }}" \
             --arg repository "${{ vars.REGISTRY_HOST }}/${{ inputs.project_name }}_${{ matrix.component }}" \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{component:$component,branch:$branch,commit:$commit,tag:$commit,repository:$repository,timestamp:$timestamp}' \
+            '{component:$component,type:$type,branch:$branch,commit:$commit,tag:$commit,repository:$repository,timestamp:$timestamp}' \
             > ${{ matrix.component }}.json
 
       - uses: actions/upload-artifact@v4

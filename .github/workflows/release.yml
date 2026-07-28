@@ -181,76 +181,25 @@ jobs:
         sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
         sudo chmod +x /usr/local/bin/yq
 
-    - name: Generate or Update GitOps manifests
-      run: |
-        IFS=',' read -ra COMPONENTS <<< "${{ steps.components.outputs.components }}"
-        for COMPONENT in "${COMPONENTS[@]}"; do
-          COMPONENT=$(echo "$COMPONENT" | xargs)
-          echo "🔍 Processing $COMPONENT"
-          
-          METADATA_FILE="releases/$COMPONENT.json"
-          if [[ ! -f "$METADATA_FILE" ]]; then
-            echo "❌ Release metadata for $COMPONENT not found"
-            echo "   Please ensure the build workflow has run successfully and the release artifacts have been generated for $COMPONENT."
-            exit 1
-          fi
-
-          TAG=$(jq -r .tag "$METADATA_FILE")
-          REPOSITORY=$(jq -r .repository "$METADATA_FILE")  
-          BRANCH=$(jq -r .branch "$METADATA_FILE")
-          COMMIT_SHA=$(jq -r .commit "$METADATA_FILE")
-
-          echo "✅ Deploying $COMPONENT with tag $TAG"
-          
-          DEST="${{ env.GITOPS_REPO_PATH }}/microservices/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}/$COMPONENT"
-          VALUES_FILE="$DEST/values.yml"
-          mkdir -p "$DEST"
-
-          # Set environment name
-          case "${{ steps.env.outputs.environment }}" in
-            "prod")
-              ENV_NAME="Production"
-              ;;
-            "staging")
-              ENV_NAME="Staging"
-              ;;
-            *)
-              ENV_NAME="Test"
-              ;;
-          esac
-
-          # Check if values.yml exists
-          if [[ -f "$VALUES_FILE" ]]; then
-            echo "📝 Updating existing values.yml for $COMPONENT"
-            
-            # Update only changed values
-            yq eval ".image.repository = \"$REPOSITORY\"" -i "$VALUES_FILE"
-            yq eval ".image.tag = \"$TAG\"" -i "$VALUES_FILE"
-            yq eval ".releaseId = \"$COMMIT_SHA\"" -i "$VALUES_FILE"
-            yq eval ".branch = \"$BRANCH\"" -i "$VALUES_FILE"
-            yq eval ".commit = \"$COMMIT_SHA\"" -i "$VALUES_FILE"
-            yq eval ".env.ENVIRONMENT = \"$ENV_NAME\"" -i "$VALUES_FILE"
-            if [[ "$COMPONENT" != "web" ]]; then
-              yq eval ".externalSecret.forceUpdateAnnotation = \"${COMMIT_SHA}-v1\"" -i "$VALUES_FILE"
-            fi
-            
-          else
-            echo "✨ Creating new values.yml for $COMPONENT"
-            
-            # Create new file with all default values
+      - name: Generate or Update GitOps manifests
+        run: |
+          write_new_values() {
+            local VALUES_FILE="$1" REPOSITORY="$2" TAG="$3" COMPONENT="$4"
+            local COMMIT_SHA="$5" BRANCH="$6" ENV_NAME="$7" INSTANCE_NAME="${8:-}" TYPE="${9:-service}"
             {
               echo "image:"
               echo "  repository: $REPOSITORY"
               echo "  tag: $TAG"
               echo "projectName: ${{ inputs.project_name }}"
               echo "componentName: $COMPONENT"
-              echo "namespace: ${{ inputs.namespace }}" 
+              echo "instanceName: $INSTANCE_NAME"
+              echo "namespace: ${{ vars.NAMESPACE }}"
               echo "releaseId: $COMMIT_SHA"
               echo "branch: $BRANCH"
               echo "commit: $COMMIT_SHA"
               echo "env:"
               echo "  ENVIRONMENT: $ENV_NAME"
-              if [[ "$COMPONENT" != "web" ]]; then
+              if [[ "$TYPE" != "web" ]]; then
                 echo "externalSecret:"
                 echo "  enabled: true"
                 echo "  forceUpdateAnnotation: ${COMMIT_SHA}-v1"
@@ -272,8 +221,110 @@ jobs:
               echo "autoscaling:"
               echo "  enabled: false"
             } > "$VALUES_FILE"
-          fi
-        done
+          }
+
+          update_values() {
+            local VALUES_FILE="$1" REPOSITORY="$2" TAG="$3"
+            local COMMIT_SHA="$4" BRANCH="$5" ENV_NAME="$6" COMPONENT="$7" TYPE="${8:-service}"
+            yq eval ".image.repository = \"$REPOSITORY\""           -i "$VALUES_FILE"
+            yq eval ".image.tag = \"$TAG\""                         -i "$VALUES_FILE"
+            yq eval ".releaseId = \"$COMMIT_SHA\""                  -i "$VALUES_FILE"
+            yq eval ".branch = \"$BRANCH\""                         -i "$VALUES_FILE"
+            yq eval ".commit = \"$COMMIT_SHA\""                     -i "$VALUES_FILE"
+            yq eval ".env.ENVIRONMENT = \"$ENV_NAME\""              -i "$VALUES_FILE"
+            if [[ "$TYPE" != "web" ]]; then
+              yq eval ".externalSecret.forceUpdateAnnotation = \"${COMMIT_SHA}-v1\"" -i "$VALUES_FILE"
+            fi
+          }
+
+          deploy_instance() {
+            local COMPONENT="$1" TAG="$2" REPOSITORY="$3" BRANCH="$4"
+            local COMMIT_SHA="$5" ENV_NAME="$6" INSTANCE_FOLDER="$7" TYPE="${8:-service}"
+
+            local BASE
+            if [[ "$TYPE" == "web" ]]; then
+              BASE="${{ env.GITOPS_REPO_PATH }}/web/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}/$INSTANCE_FOLDER"
+            else
+              BASE="${{ env.GITOPS_REPO_PATH }}/microservices/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}/$INSTANCE_FOLDER"
+            fi
+
+            local VALUES_FILE="$BASE/values.yml"
+            mkdir -p "$BASE"
+
+            if [[ -f "$VALUES_FILE" ]]; then
+              echo "📝 Updating existing values.yml for $INSTANCE_FOLDER"
+              update_values "$VALUES_FILE" "$REPOSITORY" "$TAG" "$COMMIT_SHA" "$BRANCH" "$ENV_NAME" "$COMPONENT" "$TYPE"
+            else
+              echo "✨ Creating new values.yml for $INSTANCE_FOLDER"
+              write_new_values "$VALUES_FILE" "$REPOSITORY" "$TAG" "$COMPONENT" "$COMMIT_SHA" "$BRANCH" "$ENV_NAME" "$INSTANCE_FOLDER" "$TYPE"
+            fi
+          }
+
+          # ── main loop ─────────────────────────────────────────────────────
+          IFS=',' read -ra COMPONENTS <<< "${{ steps.components.outputs.components }}"
+          for COMPONENT in "${COMPONENTS[@]}"; do
+            COMPONENT=$(echo "$COMPONENT" | xargs)
+            echo "🔍 Processing component: $COMPONENT"
+
+            METADATA_FILE="releases/$COMPONENT.json"
+            if [[ ! -f "$METADATA_FILE" ]]; then
+              echo "❌ Release metadata for $COMPONENT not found"
+              exit 1
+            fi
+
+            TAG=$(jq -r .tag               "$METADATA_FILE")
+            REPOSITORY=$(jq -r .repository "$METADATA_FILE")
+            BRANCH=$(jq -r .branch         "$METADATA_FILE")
+            COMMIT_SHA=$(jq -r .commit     "$METADATA_FILE")
+
+            # Backward compatibility: metadata artifacts produced by a build.yml older
+            # than this change won't have a "type" field. Fall back to the legacy
+            # component=="web" convention in that case.
+            TYPE=$(jq -r '.type // empty' "$METADATA_FILE")
+            if [[ -z "$TYPE" || "$TYPE" == "null" ]]; then
+              if [[ "$COMPONENT" == "web" ]]; then TYPE="web"; else TYPE="service"; fi
+            fi
+
+            case "${{ steps.env.outputs.environment }}" in
+              "prod")    ENV_NAME="Production" ;;
+              "staging") ENV_NAME="Staging" ;;
+              *)         ENV_NAME="Test" ;;
+            esac
+
+            # ── Discover instances from GitOps repo ────────────────────────
+            # Convention: an instance folder belongs to a component if its name
+            # either equals the component exactly  (e.g. issuer)
+            # or ends with  -<component>            (e.g. fcmb-issuer, kuda-issuer)
+            #
+            # This keeps the structure flat at microservices/test/<project>/<folder>
+            # so every folder is picked up by the AppSet glob: microservices/test/*/*
+            #
+            # To add a new instance: create the folder + values.yml in the GitOps repo.
+            # To remove an instance: delete the folder from the GitOps repo.
+            # ──────────────────────────────────────────────────────────────
+            if [[ "$TYPE" == "web" ]]; then
+              PROJECT_BASE="${{ env.GITOPS_REPO_PATH }}/web/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}"
+            else
+              PROJECT_BASE="${{ env.GITOPS_REPO_PATH }}/microservices/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}"
+            fi
+
+            # Match folders named exactly <component> or ending with -<component>
+            INSTANCE_DIRS=$(find "$PROJECT_BASE" -mindepth 1 -maxdepth 1 -type d 2>/dev/null \
+              | grep -E "(^|/)${COMPONENT}$|(^|/)[^/]+-${COMPONENT}$" \
+              | sort)
+
+            if [[ -z "$INSTANCE_DIRS" ]]; then
+              echo "✅ No existing instances found for $COMPONENT — deploying as base instance"
+              deploy_instance "$COMPONENT" "$TAG" "$REPOSITORY" "$BRANCH" "$COMMIT_SHA" "$ENV_NAME" "$COMPONENT" "$TYPE"
+            else
+              echo "📂 Instances found for $COMPONENT: $(echo "$INSTANCE_DIRS" | xargs -n1 basename | paste -sd', ' -)"
+              while IFS= read -r INSTANCE_PATH; do
+                INSTANCE_FOLDER=$(basename "$INSTANCE_PATH")
+                echo "✅ Deploying $INSTANCE_FOLDER (component=$COMPONENT) tag=$TAG"
+                deploy_instance "$COMPONENT" "$TAG" "$REPOSITORY" "$BRANCH" "$COMMIT_SHA" "$ENV_NAME" "$INSTANCE_FOLDER" "$TYPE"
+              done <<< "$INSTANCE_DIRS"
+            fi
+          done
 
     - name: Extract commit hash
       id: metadata
