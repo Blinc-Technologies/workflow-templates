@@ -49,7 +49,7 @@ jobs:
     
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
       with:
         ref: main
     
@@ -73,7 +73,7 @@ jobs:
         echo "Version format is valid: $VERSION"
     
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v5
       with:
         dotnet-version: ${{ inputs.dotnet-version }}
     
@@ -120,7 +120,7 @@ jobs:
         done
 
     - name: Upload NuGet package artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: nuget-packages-${{ steps.extract-version.outputs.version }}
         path: ./nupkg/*.nupkg
@@ -137,7 +137,7 @@ jobs:
     
     steps:
     - name: Download NuGet package artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: nuget-packages-${{ needs.build.outputs.version }}
         path: ./nuget-packages

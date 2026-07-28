@@ -49,10 +49,10 @@ on:
         type: string
         description: 'Branch of workflow run'
       runner_label:
-        description: "Runner label to use (default: ubuntu-latest for GitHub-hosted)"
         required: false
         type: string
         default: "ubuntu-latest"
+        description: "Runner label to use (default: ubuntu-latest for GitHub-hosted)"
     secrets:
       gh_actions_token:
         required: true
@@ -70,116 +70,113 @@ jobs:
     if: >
       inputs.trigger_type == 'workflow_dispatch' ||
       (
-        inputs.trigger_type == 'workflow_run' && 
-        inputs.workflow_run_conclusion == 'success' && 
+        inputs.trigger_type == 'workflow_run' &&
+        inputs.workflow_run_conclusion == 'success' &&
         inputs.workflow_run_branch == 'main'
       )
-  
+
     steps:
-    - name: Determine run parameters
-      id: params
-      run: |
-        if [[ "${{ inputs.trigger_type }}" == "workflow_run" ]]; then
-          # Auto-trigger from build → defaults
-          echo "environment=test" >> $GITHUB_OUTPUT
-          echo "run_id=${{ inputs.workflow_run_id }}" >> $GITHUB_OUTPUT
-        else
-          # Manual dispatch → use provided inputs
-          echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
-          echo "run_id=${{ inputs.run_id }}" >> $GITHUB_OUTPUT
-          
-          # Validate environment
-          ENVIRONMENT="${{ inputs.environment }}"
-          if [[ "$ENVIRONMENT" != "test" && "$ENVIRONMENT" != "staging" && "$ENVIRONMENT" != "prod" ]]; then
-            echo "❌ Invalid environment: $ENVIRONMENT"
-            echo "   Valid environments are: test, staging, prod"
-            exit 1
-          fi
-        fi
-
-    - name: Download Artifacts
-      uses: actions/download-artifact@v4
-      with:
-        github-token: ${{ secrets.gh_actions_token }}
-        run-id: ${{ steps.params.outputs.run_id }}
-        name: release-artifacts
-        path: releases/
-    
-    - name: Verify release metadata and determine components
-      id: components
-      run: |
-        if ! ls releases/*.json >/dev/null 2>&1; then
-          echo "❌ No release metadata found in the downloaded artifact."
-          echo "   This likely means the triggering build workflow ran with 'should_deploy=false'."
-          echo "   Please trigger the build again with 'should_deploy=true' or run this release workflow manually pointing to a build run ID that generated artifacts."
-          exit 1
-        fi
-        echo "✅ Release metadata found."
-        
-        # Determine components list
-        if [[ "${{ inputs.trigger_type }}" == "workflow_run" || ! -n "${{ inputs.components }}" ]]; then
-          # Auto-detect from artifacts
-          COMPONENTS=$(ls releases/*.json | xargs -n1 basename | sed 's/\.json//g' | paste -sd, -)
-          echo "📦 Auto-detected components: $COMPONENTS"
-        else
-          # Use provided components
-          COMPONENTS="${{ inputs.components }}"
-          echo "📦 Using provided components: $COMPONENTS"
-        fi
-        
-        echo "components=$COMPONENTS" >> $GITHUB_OUTPUT
-        COMPONENTS_ARRAY="[$(echo "$COMPONENTS" | sed 's/,/, /g')]"
-        echo "components_array=$COMPONENTS_ARRAY" >> $GITHUB_OUTPUT
-
-    - name: Set environment variables
-      id: env
-      run: |
-        ENVIRONMENT="${{ steps.params.outputs.environment }}"
-        echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
-        
-        ENVIRONMENT_UPPER=$(echo "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')
-        echo "environment_upper=$ENVIRONMENT_UPPER" >> $GITHUB_OUTPUT
-
-    - name: Enforce prod deploy policy (main only and must be tagged)
-      if: ${{ steps.params.outputs.environment == 'prod' }}
-      run: |
-        IFS=',' read -ra COMPONENTS <<< "${{ steps.components.outputs.components }}"
-        for COMPONENT in "${COMPONENTS[@]}"; do
-          COMPONENT=$(echo "$COMPONENT" | xargs)
-          FILE="releases/$COMPONENT.json"
-          if [[ ! -f "$FILE" ]]; then
-            echo "❌ Missing release metadata for $COMPONENT"
-            exit 1
-          fi
-
-          BRANCH=$(jq -r .branch "$FILE")
-          COMMIT_HASH=$(jq -r .commit "$FILE")
-
-          if [[ "$BRANCH" != "main" ]]; then
-            echo "❌ Deployment to prod is only allowed from main. Found: $BRANCH"
-            exit 1
-          fi
-
-          TAG_EXISTS=$(git ls-remote --tags origin | grep "$COMMIT_HASH" | wc -l)
-          if [[ "$TAG_EXISTS" -eq 0 ]]; then
-            echo "❌ Commit $COMMIT_HASH is not tagged. Production deployments require a Git tag."
-            exit 1
+      - name: Determine run parameters
+        id: params
+        run: |
+          if [[ "${{ inputs.trigger_type }}" == "workflow_run" ]]; then
+            echo "environment=test" >> $GITHUB_OUTPUT
+            echo "run_id=${{ inputs.workflow_run_id }}" >> $GITHUB_OUTPUT
           else
-            echo "✅ Commit $COMMIT_HASH is tagged. OK to deploy."
+            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+            echo "run_id=${{ inputs.run_id }}" >> $GITHUB_OUTPUT
+
+            ENVIRONMENT="${{ inputs.environment }}"
+            if [[ "$ENVIRONMENT" != "test" && "$ENVIRONMENT" != "staging" && "$ENVIRONMENT" != "prod" ]]; then
+              echo "❌ Invalid environment: $ENVIRONMENT"
+              echo "   Valid environments are: test, staging, prod"
+              exit 1
+            fi
           fi
-        done
 
-    - name: Checkout GitOps repo
-      uses: actions/checkout@v4
-      with:
-        repository: ${{ env.GITOPS_REPO }}
-        token: ${{ secrets.gh_gitops_token }}
-        path: ${{ env.GITOPS_REPO_PATH }}
+      - name: Download Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ secrets.gh_actions_token }}
+          run-id: ${{ steps.params.outputs.run_id }}
+          name: release-artifacts
+          path: releases/
 
-    - name: Install yq for YAML manipulation
-      run: |
-        sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-        sudo chmod +x /usr/local/bin/yq
+      - name: Verify release metadata and determine components
+        id: components
+        run: |
+          if ! ls releases/*.json >/dev/null 2>&1; then
+            echo "❌ No release metadata found in the downloaded artifact."
+            echo "   This likely means the triggering build workflow ran with 'should_deploy=false'."
+            echo "   Please trigger the build again with 'should_deploy=true' or run this release workflow manually pointing to a build run ID that generated artifacts."
+            exit 1
+          fi
+          echo "✅ Release metadata found."
+
+          if [[ "${{ inputs.trigger_type }}" == "workflow_run" || ! -n "${{ inputs.components }}" ]]; then
+            COMPONENTS=$(ls releases/*.json | xargs -n1 basename | sed 's/\.json//g' | paste -sd, -)
+            echo "📦 Auto-detected components: $COMPONENTS"
+          else
+            COMPONENTS="${{ inputs.components }}"
+            echo "📦 Using provided components: $COMPONENTS"
+          fi
+
+          echo "components=$COMPONENTS" >> $GITHUB_OUTPUT
+          COMPONENTS_ARRAY="[$(echo "$COMPONENTS" | sed 's/,/, /g')]"
+          echo "components_array=$COMPONENTS_ARRAY" >> $GITHUB_OUTPUT
+
+      - name: Set environment variables
+        id: env
+        run: |
+          ENVIRONMENT="${{ steps.params.outputs.environment }}"
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+
+          ENVIRONMENT_UPPER=$(echo "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')
+          echo "environment_upper=$ENVIRONMENT_UPPER" >> $GITHUB_OUTPUT
+
+      - name: Enforce prod deploy policy (main only and must be tagged)
+        if: steps.params.outputs.environment == 'prod'
+        run: |
+          IFS=',' read -ra COMPONENTS <<< "${{ steps.components.outputs.components }}"
+          for COMPONENT in "${COMPONENTS[@]}"; do
+            COMPONENT=$(echo "$COMPONENT" | xargs)
+            FILE="releases/$COMPONENT.json"
+            if [[ ! -f "$FILE" ]]; then
+              echo "❌ Missing release metadata for $COMPONENT"
+              exit 1
+            fi
+
+            BRANCH=$(jq -r .branch "$FILE")
+            COMMIT_HASH=$(jq -r .commit "$FILE")
+
+            if [[ "$BRANCH" != "main" ]]; then
+              echo "❌ Deployment to prod is only allowed from main. Found: $BRANCH"
+              exit 1
+            fi
+
+            TAG_EXISTS=$(curl -s -H "Authorization: Bearer ${{ secrets.gh_actions_token }}" \
+              "https://api.github.com/repos/${{ github.repository }}/git/refs/tags" \
+              | jq --arg sha "$COMMIT_HASH" '[.[] | select(.object.sha == $sha)] | length')
+
+            if [[ "$TAG_EXISTS" -eq 0 ]]; then
+              echo "❌ Commit $COMMIT_HASH is not tagged. Production deployments require a Git tag."
+              exit 1
+            else
+              echo "✅ Commit $COMMIT_HASH is tagged. OK to deploy."
+            fi
+          done
+
+      - name: Checkout GitOps repo
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.gh_gitops_token }}
+          path: ${{ env.GITOPS_REPO_PATH }}
+
+      - name: Install yq for YAML manipulation
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
 
     - name: Generate or Update GitOps manifests
       run: |
@@ -326,47 +323,48 @@ jobs:
           fi
         done
 
-    - name: Extract commit hash
-      id: metadata
-      run: |
-        FIRST_COMPONENT=$(echo "${{ steps.components.outputs.components }}" | cut -d',' -f1 | xargs)
-        COMMIT_SHA=$(jq -r .commit "releases/$FIRST_COMPONENT.json")
-        echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+      - name: Extract commit hash
+        id: metadata
+        run: |
+          FIRST_COMPONENT=$(echo "${{ steps.components.outputs.components }}" | cut -d',' -f1 | xargs)
+          COMMIT_SHA=$(jq -r .commit "releases/$FIRST_COMPONENT.json")
+          echo "commit_sha=${COMMIT_SHA}" >> $GITHUB_OUTPUT
+          echo "short_sha=${COMMIT_SHA:0:7}" >> $GITHUB_OUTPUT
 
-    - name: Push to GitOps repo (test/staging)
-      if: ${{ steps.params.outputs.environment != 'prod' }}
-      run: |
-        cd ${{ env.GITOPS_REPO_PATH }}
-        git config user.name github-actions
-        git config user.email github-actions@github.com
-        git add .
-        
-        if git diff --staged --quiet; then
-          echo "ℹ️ No changes to commit"
-        else
-          git commit -m "🚀 Deploy ${{ inputs.project_name }} Commit: ${{ steps.metadata.outputs.commit_sha }}  Environment: ${{ steps.env.outputs.environment_upper }}"
-          git push origin main
-          echo "✅ Changes pushed to GitOps repository"
-        fi
+      - name: Push to GitOps repo (test/staging)
+        if: steps.params.outputs.environment != 'prod'
+        run: |
+          cd ${{ env.GITOPS_REPO_PATH }}
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add .
 
-    - name: Open PR for production deployment
-      if: ${{ steps.params.outputs.environment == 'prod' }}
-      uses: peter-evans/create-pull-request@v5
-      with:
-        token: ${{ secrets.gh_gitops_token }}
-        base: main
-        branch: release-${{ inputs.project_name }}-${{ steps.metadata.outputs.commit_sha }}-${{ steps.env.outputs.environment }}
-        title: "[${{ steps.env.outputs.environment_upper }}] Release ${{ inputs.project_name }}"
-        path: ${{ env.GITOPS_REPO_PATH }}
-        body: |
-          ## Release Details
-          
-          **Project:** ${{ inputs.project_name }}
-          **Environment:** ${{ steps.env.outputs.environment_upper }}
-          **Commit:** ${{ steps.metadata.outputs.commit_sha }}
-          **Components:** ${{ steps.components.outputs.components_array }}
-          
-          This PR was automatically generated by the release workflow.
-        commit-message: "🚀 Release ${{ inputs.project_name }} Commit: ${{ steps.metadata.outputs.commit_sha }}  Environment: ${{ steps.env.outputs.environment_upper }}"
-        delete-branch: true
-        labels: release-${{ inputs.project_name }}
+          if git diff --staged --quiet; then
+            echo "ℹ️ No changes to commit"
+          else
+            git commit -m "🚀 Deploy ${{ inputs.project_name }} Commit: ${{ steps.metadata.outputs.commit_sha }}  Environment: ${{ steps.env.outputs.environment_upper }}"
+            git push origin main
+            echo "✅ Changes pushed to GitOps repository"
+          fi
+
+      - name: Open PR for production deployment
+        if: steps.params.outputs.environment == 'prod'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.gh_gitops_token }}
+          base: main
+          branch: release-${{ inputs.project_name }}-${{ steps.metadata.outputs.short_sha }}-${{ steps.env.outputs.environment }}
+          title: "[${{ steps.env.outputs.environment_upper }}] Release ${{ inputs.project_name }}"
+          path: ${{ env.GITOPS_REPO_PATH }}
+          body: |
+            ## Release Details
+
+            **Project:** ${{ inputs.project_name }}
+            **Environment:** ${{ steps.env.outputs.environment_upper }}
+            **Commit:** ${{ steps.metadata.outputs.commit_sha }}
+            **Components:** ${{ steps.components.outputs.components_array }}
+
+            This PR was automatically generated by the release workflow.
+          commit-message: "🚀 Release ${{ inputs.project_name }} Commit: ${{ steps.metadata.outputs.commit_sha }}  Environment: ${{ steps.env.outputs.environment_upper }}"
+          delete-branch: true
+          labels: release-${{ inputs.project_name }}

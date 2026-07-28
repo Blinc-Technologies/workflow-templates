@@ -55,13 +55,13 @@ jobs:
       matrix: ${{ steps.matrix.outputs.value }}
       should_release: ${{ steps.release.outputs.value }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Determine release strategy
         id: release
         run: |
           SHOULD_RELEASE=false
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" =~ ^refs/heads/(main|feature/) ]]; then
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" =~ ^refs/heads/(main|master) ]]; then
             SHOULD_RELEASE=true
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.create_release }}" == "true" ]]; then
             SHOULD_RELEASE=true
@@ -129,7 +129,7 @@ jobs:
           echo "${{ vars[steps.env-key.outputs.name] || vars.ENV_VARS }}" > "${{ matrix.path }}/.env"
           echo "✅ .env file created for frontend build (${{ matrix.component }})"
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
         with:
           driver-opts: |
             image=moby/buildkit:latest
@@ -156,7 +156,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Build and push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.path }}/Dockerfile
@@ -184,7 +184,7 @@ jobs:
             '{component:$component,type:$type,branch:$branch,commit:$commit,tag:$commit,repository:$repository,timestamp:$timestamp}' \
             > ${{ matrix.component }}.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: needs.prepare.outputs.should_release == 'true'
         with:
           name: metadata-${{ matrix.component }}
@@ -196,7 +196,7 @@ jobs:
     if: needs.prepare.outputs.should_release == 'true'
     runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: metadata
 
@@ -210,14 +210,14 @@ jobs:
           # Clean up empty subdirs
           find metadata -type d -empty -delete
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-artifacts
           path: metadata
           retention-days: 90
 
       - name: Delete temporary artifacts
-        uses: geekyeggo/delete-artifact@v5
+        uses: geekyeggo/delete-artifact@v6
         with:
           name: metadata-*
           failOnError: false
