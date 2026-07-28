@@ -24,10 +24,6 @@ on:
         description: "Optional build arguments in KEY=VALUE format, separated by newlines"
         required: false
         type: string
-      frontend_env:
-        description: "Frontend .env file content (entire file as a single variable)"
-        required: false
-        type: string
       github_username:
         description: "GitHub username for package authentication"
         required: false

@@ -19,14 +19,6 @@ on:
         required: true
         type: string
         description: 'Project name'
-      namespace:
-        required: true
-        type: string
-        description: 'Kubernetes namespace'
-      secret_store_name:
-        required: false
-        type: string
-        description: 'External secret store name'
       gitops_repo:
         required: false
         type: string
