@@ -5,8 +5,10 @@
 name: Release
 
 on:
+  push:
+    tags: ['v*']
   workflow_run:
-    workflows: ["Build"] 
+    workflows: ["Build"]
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -31,16 +33,17 @@ jobs:
   release:
     uses: Blinc-Technologies/workflow-templates/.github/workflows/release.yml@main
     with:
-      environment: ${{ inputs.environment }}
+      # A tag push only ever means prod -- forcing it here (rather than leaving it to
+      # release.yml's internal logic) also makes GitHub's prod Environment protection
+      # rules (e.g. required reviewers) actually engage before the job runs.
+      environment: ${{ github.event_name == 'push' && 'prod' || inputs.environment }}
       components: ${{ inputs.components }}
       run_id: ${{ inputs.run_id }}
-      trigger_type: ${{ github.event_name }}
+      trigger_type: ${{ github.event_name == 'push' && 'push_tag' || github.event_name }}
       workflow_run_id: ${{ github.event.workflow_run.id }}
       workflow_run_conclusion: ${{ github.event.workflow_run.conclusion }}
       workflow_run_branch: ${{ github.event.workflow_run.head_branch }}
       project_name: ${{ vars.PROJECT_NAME }}
-      namespace: ${{ vars.NAMESPACE }}
-      secret_store_name: ${{ vars.SECRET_STORE_NAME }}
     secrets:
       gh_actions_token: ${{ secrets.GH_ACTIONS_TOKEN }}
       gh_gitops_token: ${{ secrets.GH_GITOPS_TOKEN }}
@@ -50,15 +53,37 @@ jobs:
 #
 # File: .github/workflows/build.yml
 #
+# on:
+#   push:
+#     branches: [main, 'feature/**']
+#   workflow_dispatch:
+#     inputs:
+#       environment:
+#         description: 'Leave blank to build + tag for every environment (main only). Pick one to build just that tag.'
+#         required: false
+#         type: choice
+#         default: ''
+#         options: ['', test, staging, prod]
+#       create_release:
+#         description: 'Force release even on workflow_dispatch'
+#         default: 'false'
+#         type: choice
+#         options: ['true', 'false']
+#
 #   jobs:
 #     build:
+#       # id-token: write is required for build.yml's ECR/OIDC steps -- a reusable
+#       # workflow's job can never request more than the caller grants, so this must
+#       # be declared here, not just inside build.yml.
+#       permissions:
+#         id-token: write
+#         contents: read
 #       uses: Blinc-Technologies/workflow-templates/.github/workflows/build.yml@main
 #       with:
+#         environment: ${{ inputs.environment }}
 #         project_name: ${{ vars.PROJECT_NAME }}
 #         components_to_build: 'api, worker, web'
 #         create_release: ${{ inputs.create_release || 'false' }}
-#         frontend_env: ${{ vars.FRONTEND_ENV_FILE }}
 #       secrets:
-#         registry_username: ${{ secrets.REGISTRY_USERNAME }}
-#         registry_password: ${{ secrets.REGISTRY_PASSWORD }}
+#         aws_role_arn: ${{ secrets.AWS_ROLE_ARN }}
 # ────────────────────────────────────────────────────────────

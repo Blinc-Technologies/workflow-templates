@@ -34,12 +34,6 @@ on:
         type: string
         default: "ubuntu-latest"
     secrets:
-      registry_username:
-        description: "Registry username"
-        required: false
-      registry_password:
-        description: "Registry password or token"
-        required: false
       packages_token:
         description: "GitHub token for package authentication"
         required: false

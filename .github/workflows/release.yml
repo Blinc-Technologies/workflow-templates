@@ -170,8 +170,10 @@ jobs:
               exit 1
             fi
 
+            # git/matching-refs (not git/refs) -- the latter returns a bare object instead
+            # of a 1-element array when exactly one tag matches, breaking this jq pipeline.
             TAG_EXISTS=$(curl -s -H "Authorization: Bearer ${{ secrets.gh_actions_token }}" \
-              "https://api.github.com/repos/${{ github.repository }}/git/refs/tags" \
+              "https://api.github.com/repos/${{ github.repository }}/git/matching-refs/tags" \
               | jq --arg sha "$COMMIT_HASH" '[.[] | select(.object.sha == $sha)] | length')
 
             if [[ "$TAG_EXISTS" -eq 0 ]]; then
