@@ -190,6 +190,10 @@ jobs:
           repository: ${{ env.GITOPS_REPO }}
           token: ${{ secrets.gh_gitops_token }}
           path: ${{ env.GITOPS_REPO_PATH }}
+          # peter-evans/create-pull-request sets its own Authorization header when pushing;
+          # a persisted one here collides with it (duplicate header -> 400 from GitHub).
+          # The test/staging push step sets its own auth explicitly instead of relying on this.
+          persist-credentials: false
 
       - name: Install yq for YAML manipulation
         run: |
@@ -370,6 +374,7 @@ jobs:
           cd ${{ env.GITOPS_REPO_PATH }}
           git config user.name github-actions
           git config user.email github-actions@github.com
+          git remote set-url origin "https://x-access-token:${{ secrets.gh_gitops_token }}@github.com/${{ env.GITOPS_REPO }}.git"
           git add .
 
           if git diff --staged --quiet; then
