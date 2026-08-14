@@ -387,6 +387,7 @@ jobs:
 
       - name: Open PR for production deployment
         if: steps.params.outputs.environment == 'prod'
+        id: create-pr
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.gh_gitops_token }}
@@ -406,3 +407,9 @@ jobs:
           commit-message: "🚀 Release ${{ inputs.project_name }} Commit: ${{ steps.metadata.outputs.commit_sha }}  Environment: ${{ steps.env.outputs.environment_upper }}"
           delete-branch: true
           labels: release-${{ inputs.project_name }}
+
+      - name: Surface PR link in job summary
+        if: steps.params.outputs.environment == 'prod' && steps.create-pr.outputs.pull-request-url
+        run: |
+          echo "### 🚀 Production release PR" >> $GITHUB_STEP_SUMMARY
+          echo "[${{ steps.create-pr.outputs.pull-request-url }}](${{ steps.create-pr.outputs.pull-request-url }})" >> $GITHUB_STEP_SUMMARY
