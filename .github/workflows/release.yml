@@ -58,9 +58,6 @@ env:
 jobs:
   release:
     runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
-    # push_tag always means prod -- the caller must pass environment: 'prod' explicitly
-    # (not derivable from inputs.environment alone at job-start time), so that GitHub's
-    # prod Environment protection rules (e.g. required reviewers) actually engage here.
     environment: ${{ inputs.environment || 'test' }}
     if: >
       inputs.trigger_type == 'workflow_dispatch' ||
@@ -190,9 +187,6 @@ jobs:
           repository: ${{ env.GITOPS_REPO }}
           token: ${{ secrets.gh_gitops_token }}
           path: ${{ env.GITOPS_REPO_PATH }}
-          # peter-evans/create-pull-request sets its own Authorization header when pushing;
-          # a persisted one here collides with it (duplicate header -> 400 from GitHub).
-          # The test/staging push step sets its own auth explicitly instead of relying on this.
           persist-credentials: false
 
       - name: Install yq for YAML manipulation
