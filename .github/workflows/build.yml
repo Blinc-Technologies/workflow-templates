@@ -179,18 +179,12 @@ jobs:
       - name: Resolve image tags to push
         id: tags
         run: |
-          # Two modes:
-          #   - inputs.environment unset (e.g. plain push to main): build once, tag for
-          #     every environment this build qualifies for (test always; staging/prod only
-          #     from main).
-          #   - inputs.environment set explicitly: tag ONLY that one environment. staging/prod
-          #     still require main -- ECR never gets a push from a non-main build, dispatched
-          #     or not.
           BASE="${{ steps.image-tag.outputs.value }}"
           TEST_REPO=""
           STAGING_REPO=""
           PROD_REPO=""
           TAGS=""
+          PLATFORMS="linux/amd64"
 
           if [[ "${{ needs.prepare.outputs.should_release }}" != "true" ]]; then
             TEST_REPO="${{ vars.REGISTRY_HOST }}/${{ inputs.project_name }}_${{ matrix.component }}"
@@ -212,6 +206,7 @@ jobs:
                   TAGS="$TAGS
           $STAGING_REPO:staging-$BASE
           $PROD_REPO:prod-$BASE"
+                  PLATFORMS="linux/amd64,linux/arm64"
                 fi
                 ;;
               test)
@@ -226,6 +221,7 @@ jobs:
                 REPO="${{ steps.ecr-login.outputs.registry }}/${{ inputs.project_name }}_${{ matrix.component }}"
                 if [[ "$TARGET_ENV" == "staging" ]]; then STAGING_REPO="$REPO"; else PROD_REPO="$REPO"; fi
                 TAGS="$REPO:$TARGET_ENV-$BASE"
+                PLATFORMS="linux/arm64"
                 ;;
               *)
                 echo "❌ Unknown environment: $TARGET_ENV"
@@ -237,9 +233,16 @@ jobs:
           echo "test_repo=$TEST_REPO" >> $GITHUB_OUTPUT
           echo "staging_repo=$STAGING_REPO" >> $GITHUB_OUTPUT
           echo "prod_repo=$PROD_REPO" >> $GITHUB_OUTPUT
+          echo "platforms=$PLATFORMS" >> $GITHUB_OUTPUT
           echo "value<<EOF" >> $GITHUB_OUTPUT
           echo "$TAGS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Set up QEMU
+        if: contains(steps.tags.outputs.platforms, 'arm64')
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Build and push
         uses: docker/build-push-action@v7
@@ -248,6 +251,7 @@ jobs:
           file: ${{ matrix.path }}/Dockerfile
           push: ${{ needs.prepare.outputs.should_release == 'true' }}
           tags: ${{ steps.tags.outputs.value }}
+          platforms: ${{ steps.tags.outputs.platforms }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
