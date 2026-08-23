@@ -34,14 +34,11 @@ on:
         type: string
         default: "ubuntu-latest"
     secrets:
-      registry_username:
-        description: "Registry username"
-        required: false
-      registry_password:
-        description: "Registry password or token"
-        required: false
       packages_token:
         description: "GitHub token for package authentication"
+        required: false
+      aws_role_arn:
+        description: "IAM role to assume (via OIDC) for pushing to ECR. Required when environment is staging or prod."
         required: false
 
 jobs:
@@ -74,14 +71,26 @@ jobs:
             while IFS= read -r dir; do
               component=$(basename "$dir" | sed 's/.*\.//' | tr '[:upper:]' '[:lower:]')
               if [[ "${{ inputs.components_to_build }}" == *"$component"* ]]; then
-                components=$(jq -c --arg c "$component" --arg p "$dir" '. += [{"component":$c,"path":$p}]' <<< "$components")
+                components=$(jq -c --arg c "$component" --arg p "$dir" '. += [{"component":$c,"path":$p,"type":"service"}]' <<< "$components")
               fi
             done < <(find src -maxdepth 1 -mindepth 1 -type d -exec test -f {}/Dockerfile \; -print)
           fi
 
+          # Scan apps/ subdirectories for standalone frontend components in a monorepo
+          # (e.g. apps/partner-dashboard/Dockerfile). Component name = folder name, verbatim.
+          if [ -d "apps" ]; then
+            while IFS= read -r dir; do
+              component=$(basename "$dir")
+              if [[ "${{ inputs.components_to_build }}" == *"$component"* ]]; then
+                components=$(jq -c --arg c "$component" --arg p "$dir" '. += [{"component":$c,"path":$p,"type":"web"}]' <<< "$components")
+                echo "📦 Added apps/$component web component"
+              fi
+            done < <(find apps -maxdepth 1 -mindepth 1 -type d -exec test -f {}/Dockerfile \; -print)
+          fi
+
           # Check for root-level Dockerfile (frontend/web component)
           if [[ -f "Dockerfile" && "${{ inputs.components_to_build }}" == *"web"* ]]; then
-            components=$(jq -c '. += [{"component":"web","path":"."}]' <<< "$components")
+            components=$(jq -c '. += [{"component":"web","path":".","type":"web"}]' <<< "$components")
             echo "📦 Added root-level web component"
           fi
 
@@ -92,6 +101,9 @@ jobs:
     if: needs.prepare.outputs.matrix != '{"component":[]}'
     runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     environment: ${{ inputs.environment || 'test' }}
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       max-parallel: 10
@@ -100,11 +112,18 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Create frontend .env file
-        if: vars.ENV_VARS != '' && matrix.component == 'web'
+      - name: Resolve frontend env vars key
+        id: env-key
+        if: matrix.type == 'web'
         run: |
-          echo "${{ vars.ENV_VARS }}" > .env
-          echo "✅ .env file created for frontend build"
+          KEY=$(echo "${{ matrix.component }}" | tr '[:lower:]-' '[:upper:]_')
+          echo "name=ENV_VARS_${KEY}" >> "$GITHUB_OUTPUT"
+
+      - name: Create frontend .env file
+        if: matrix.type == 'web' && (vars[steps.env-key.outputs.name] != '' || vars.ENV_VARS != '')
+        run: |
+          echo "${{ vars[steps.env-key.outputs.name] || vars.ENV_VARS }}" > "${{ matrix.path }}/.env"
+          echo "✅ .env file created for frontend build (${{ matrix.component }})"
 
       - uses: docker/setup-buildx-action@v4
         with:
@@ -132,13 +151,107 @@ jobs:
           echo "${{ inputs.build_args }}" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+      - name: Compute image tag
+        id: image-tag
+        run: echo "value=${{ github.sha }}-${{ github.run_number }}" >> $GITHUB_OUTPUT
+
+      # ECR is needed unless this build explicitly targets 'test' only. That covers both
+      # the auto case (no environment input -> tag everything) and an explicit staging/prod pick.
+      - name: Configure AWS credentials
+        if: needs.prepare.outputs.should_release == 'true' && (github.ref_name == 'main' || github.ref_name == 'master') && inputs.environment != 'test'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.aws_role_arn }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        if: needs.prepare.outputs.should_release == 'true' && (github.ref_name == 'main' || github.ref_name == 'master') && inputs.environment != 'test'
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Ensure ECR repository exists
+        if: needs.prepare.outputs.should_release == 'true' && (github.ref_name == 'main' || github.ref_name == 'master') && inputs.environment != 'test'
+        run: |
+          REPO_NAME="${{ inputs.project_name }}_${{ matrix.component }}"
+          aws ecr describe-repositories --repository-names "$REPO_NAME" >/dev/null 2>&1 || \
+            aws ecr create-repository --repository-name "$REPO_NAME" --image-scanning-configuration scanOnPush=true
+
+      - name: Resolve image tags to push
+        id: tags
+        run: |
+          BASE="${{ steps.image-tag.outputs.value }}"
+          TEST_REPO=""
+          STAGING_REPO=""
+          PROD_REPO=""
+          TAGS=""
+          PLATFORMS="linux/amd64"
+
+          if [[ "${{ needs.prepare.outputs.should_release }}" != "true" ]]; then
+            TEST_REPO="${{ vars.REGISTRY_HOST }}/${{ inputs.project_name }}_${{ matrix.component }}"
+            TAGS="$TEST_REPO:test-$BASE"
+          else
+            IS_MAIN=false
+            if [[ "${{ github.ref_name }}" == "main" || "${{ github.ref_name }}" == "master" ]]; then
+              IS_MAIN=true
+            fi
+            TARGET_ENV="${{ inputs.environment }}"
+
+            case "$TARGET_ENV" in
+              "")
+                TEST_REPO="${{ vars.REGISTRY_HOST }}/${{ inputs.project_name }}_${{ matrix.component }}"
+                TAGS="$TEST_REPO:test-$BASE"
+                if [[ "$IS_MAIN" == "true" ]]; then
+                  STAGING_REPO="${{ steps.ecr-login.outputs.registry }}/${{ inputs.project_name }}_${{ matrix.component }}"
+                  PROD_REPO="$STAGING_REPO"
+                  TAGS="$TAGS
+          $STAGING_REPO:staging-$BASE
+          $PROD_REPO:prod-$BASE"
+                  PLATFORMS="linux/amd64,linux/arm64"
+                fi
+                ;;
+              test)
+                TEST_REPO="${{ vars.REGISTRY_HOST }}/${{ inputs.project_name }}_${{ matrix.component }}"
+                TAGS="$TEST_REPO:test-$BASE"
+                ;;
+              staging|prod)
+                if [[ "$IS_MAIN" != "true" ]]; then
+                  echo "❌ environment=$TARGET_ENV requires building from main -- ECR never accepts a push from another branch. Current branch: ${{ github.ref_name }}"
+                  exit 1
+                fi
+                REPO="${{ steps.ecr-login.outputs.registry }}/${{ inputs.project_name }}_${{ matrix.component }}"
+                if [[ "$TARGET_ENV" == "staging" ]]; then STAGING_REPO="$REPO"; else PROD_REPO="$REPO"; fi
+                TAGS="$REPO:$TARGET_ENV-$BASE"
+                PLATFORMS="linux/arm64"
+                ;;
+              *)
+                echo "❌ Unknown environment: $TARGET_ENV"
+                exit 1
+                ;;
+            esac
+          fi
+
+          echo "test_repo=$TEST_REPO" >> $GITHUB_OUTPUT
+          echo "staging_repo=$STAGING_REPO" >> $GITHUB_OUTPUT
+          echo "prod_repo=$PROD_REPO" >> $GITHUB_OUTPUT
+          echo "platforms=$PLATFORMS" >> $GITHUB_OUTPUT
+          echo "value<<EOF" >> $GITHUB_OUTPUT
+          echo "$TAGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Set up QEMU
+        if: contains(steps.tags.outputs.platforms, 'arm64')
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.path }}/Dockerfile
           push: ${{ needs.prepare.outputs.should_release == 'true' }}
-          tags: ${{ vars.REGISTRY_HOST }}/${{ inputs.project_name }}_${{ matrix.component }}:${{ github.sha }}
+          tags: ${{ steps.tags.outputs.value }}
+          platforms: ${{ steps.tags.outputs.platforms }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
@@ -151,13 +264,21 @@ jobs:
       - name: Generate metadata
         if: needs.prepare.outputs.should_release == 'true'
         run: |
+          # staging and prod share one AWS account/ECR repo, distinguished only by tag prefix.
+          # An empty registries.<env> means this specific build was never pushed there.
           jq -nc \
             --arg component "${{ matrix.component }}" \
+            --arg type "${{ matrix.type }}" \
             --arg branch "${{ github.ref_name }}" \
             --arg commit "${{ github.sha }}" \
-            --arg repository "${{ vars.REGISTRY_HOST }}/${{ inputs.project_name }}_${{ matrix.component }}" \
+            --arg base_tag "${{ steps.image-tag.outputs.value }}" \
+            --arg test_repo "${{ steps.tags.outputs.test_repo }}" \
+            --arg staging_repo "${{ steps.tags.outputs.staging_repo }}" \
+            --arg prod_repo "${{ steps.tags.outputs.prod_repo }}" \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{component:$component,branch:$branch,commit:$commit,tag:$commit,repository:$repository,timestamp:$timestamp}' \
+            '{component:$component,type:$type,branch:$branch,commit:$commit,base_tag:$base_tag,
+              registries:{test:$test_repo, staging:$staging_repo, prod:$prod_repo},
+              timestamp:$timestamp}' \
             > ${{ matrix.component }}.json
 
       - uses: actions/upload-artifact@v7

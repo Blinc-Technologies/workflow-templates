@@ -27,7 +27,7 @@ on:
       trigger_type:
         required: true
         type: string
-        description: 'workflow_run | workflow_dispatch'
+        description: 'workflow_run | workflow_dispatch | push_tag'
       workflow_run_id:
         required: false
         type: string
@@ -61,6 +61,7 @@ jobs:
     environment: ${{ inputs.environment || 'test' }}
     if: >
       inputs.trigger_type == 'workflow_dispatch' ||
+      inputs.trigger_type == 'push_tag' ||
       (
         inputs.trigger_type == 'workflow_run' &&
         inputs.workflow_run_conclusion == 'success' &&
@@ -74,6 +75,26 @@ jobs:
           if [[ "${{ inputs.trigger_type }}" == "workflow_run" ]]; then
             echo "environment=test" >> $GITHUB_OUTPUT
             echo "run_id=${{ inputs.workflow_run_id }}" >> $GITHUB_OUTPUT
+
+          elif [[ "${{ inputs.trigger_type }}" == "push_tag" ]]; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+
+            # A tag push only carries a commit SHA, not a build run_id -- resolve it by
+            # asking the API for the most recent successful Build run against that exact
+            # commit. Assumes the consuming repo's build workflow file is build.yml.
+            RUN_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.gh_actions_token }}" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/build.yml/runs?head_sha=${{ github.sha }}&status=success&per_page=1" \
+              | jq -r '.workflow_runs[0].id // empty')
+
+            if [[ -z "$RUN_ID" ]]; then
+              echo "❌ No successful Build run found for commit ${{ github.sha }}."
+              echo "   This commit must already have gone through the normal main-branch Build pipeline before it can be tagged for a prod release."
+              exit 1
+            fi
+
+            echo "✅ Resolved Build run $RUN_ID for tagged commit ${{ github.sha }}"
+            echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+
           else
             echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
             echo "run_id=${{ inputs.run_id }}" >> $GITHUB_OUTPUT
@@ -146,8 +167,10 @@ jobs:
               exit 1
             fi
 
+            # git/matching-refs (not git/refs) -- the latter returns a bare object instead
+            # of a 1-element array when exactly one tag matches, breaking this jq pipeline.
             TAG_EXISTS=$(curl -s -H "Authorization: Bearer ${{ secrets.gh_actions_token }}" \
-              "https://api.github.com/repos/${{ github.repository }}/git/refs/tags" \
+              "https://api.github.com/repos/${{ github.repository }}/git/matching-refs/tags" \
               | jq --arg sha "$COMMIT_HASH" '[.[] | select(.object.sha == $sha)] | length')
 
             if [[ "$TAG_EXISTS" -eq 0 ]]; then
@@ -164,6 +187,7 @@ jobs:
           repository: ${{ env.GITOPS_REPO }}
           token: ${{ secrets.gh_gitops_token }}
           path: ${{ env.GITOPS_REPO_PATH }}
+          persist-credentials: false
 
       - name: Install yq for YAML manipulation
         run: |
@@ -174,7 +198,7 @@ jobs:
         run: |
           write_new_values() {
             local VALUES_FILE="$1" REPOSITORY="$2" TAG="$3" COMPONENT="$4"
-            local COMMIT_SHA="$5" BRANCH="$6" ENV_NAME="$7" INSTANCE_NAME="${8:-}"
+            local COMMIT_SHA="$5" BRANCH="$6" ENV_NAME="$7" INSTANCE_NAME="${8:-}" TYPE="${9:-service}"
             {
               echo "image:"
               echo "  repository: $REPOSITORY"
@@ -188,7 +212,7 @@ jobs:
               echo "commit: $COMMIT_SHA"
               echo "env:"
               echo "  ENVIRONMENT: $ENV_NAME"
-              if [[ "$COMPONENT" != "web" ]]; then
+              if [[ "$TYPE" != "web" ]]; then
                 echo "externalSecret:"
                 echo "  enabled: true"
                 echo "  forceUpdateAnnotation: ${COMMIT_SHA}-v1"
@@ -214,24 +238,24 @@ jobs:
 
           update_values() {
             local VALUES_FILE="$1" REPOSITORY="$2" TAG="$3"
-            local COMMIT_SHA="$4" BRANCH="$5" ENV_NAME="$6" COMPONENT="$7"
+            local COMMIT_SHA="$4" BRANCH="$5" ENV_NAME="$6" COMPONENT="$7" TYPE="${8:-service}"
             yq eval ".image.repository = \"$REPOSITORY\""           -i "$VALUES_FILE"
             yq eval ".image.tag = \"$TAG\""                         -i "$VALUES_FILE"
             yq eval ".releaseId = \"$COMMIT_SHA\""                  -i "$VALUES_FILE"
             yq eval ".branch = \"$BRANCH\""                         -i "$VALUES_FILE"
             yq eval ".commit = \"$COMMIT_SHA\""                     -i "$VALUES_FILE"
             yq eval ".env.ENVIRONMENT = \"$ENV_NAME\""              -i "$VALUES_FILE"
-            if [[ "$COMPONENT" != "web" ]]; then
+            if [[ "$TYPE" != "web" ]]; then
               yq eval ".externalSecret.forceUpdateAnnotation = \"${COMMIT_SHA}-v1\"" -i "$VALUES_FILE"
             fi
           }
 
           deploy_instance() {
             local COMPONENT="$1" TAG="$2" REPOSITORY="$3" BRANCH="$4"
-            local COMMIT_SHA="$5" ENV_NAME="$6" INSTANCE_FOLDER="$7"
+            local COMMIT_SHA="$5" ENV_NAME="$6" INSTANCE_FOLDER="$7" TYPE="${8:-service}"
 
             local BASE
-            if [[ "$COMPONENT" == "web" ]]; then
+            if [[ "$TYPE" == "web" ]]; then
               BASE="${{ env.GITOPS_REPO_PATH }}/web/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}/$INSTANCE_FOLDER"
             else
               BASE="${{ env.GITOPS_REPO_PATH }}/microservices/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}/$INSTANCE_FOLDER"
@@ -242,10 +266,10 @@ jobs:
 
             if [[ -f "$VALUES_FILE" ]]; then
               echo "📝 Updating existing values.yml for $INSTANCE_FOLDER"
-              update_values "$VALUES_FILE" "$REPOSITORY" "$TAG" "$COMMIT_SHA" "$BRANCH" "$ENV_NAME" "$COMPONENT"
+              update_values "$VALUES_FILE" "$REPOSITORY" "$TAG" "$COMMIT_SHA" "$BRANCH" "$ENV_NAME" "$COMPONENT" "$TYPE"
             else
               echo "✨ Creating new values.yml for $INSTANCE_FOLDER"
-              write_new_values "$VALUES_FILE" "$REPOSITORY" "$TAG" "$COMPONENT" "$COMMIT_SHA" "$BRANCH" "$ENV_NAME" "$INSTANCE_FOLDER"
+              write_new_values "$VALUES_FILE" "$REPOSITORY" "$TAG" "$COMPONENT" "$COMMIT_SHA" "$BRANCH" "$ENV_NAME" "$INSTANCE_FOLDER" "$TYPE"
             fi
           }
 
@@ -261,10 +285,33 @@ jobs:
               exit 1
             fi
 
-            TAG=$(jq -r .tag               "$METADATA_FILE")
-            REPOSITORY=$(jq -r .repository "$METADATA_FILE")
-            BRANCH=$(jq -r .branch         "$METADATA_FILE")
-            COMMIT_SHA=$(jq -r .commit     "$METADATA_FILE")
+            # build.yml pushes one image with an alias tag per environment (test-/staging-/prod-),
+            # sharing one ECR repo for staging+prod. Pick the alias for the environment we're
+            # actually deploying to -- an empty registries.<env> means this build never reached it
+            # (e.g. it wasn't built from main, or a specific --environment was picked at build time).
+            BASE_TAG=$(jq -r '.base_tag // empty' "$METADATA_FILE")
+            if [[ -n "$BASE_TAG" ]]; then
+              REPOSITORY=$(jq -r --arg env "${{ steps.env.outputs.environment }}" '.registries[$env] // empty' "$METADATA_FILE")
+              if [[ -z "$REPOSITORY" ]]; then
+                echo "❌ No ${{ steps.env.outputs.environment }} image available for $COMPONENT -- this build was never pushed to that registry."
+                exit 1
+              fi
+              TAG="${{ steps.env.outputs.environment }}-$BASE_TAG"
+            else
+              # Backward compatibility: metadata from a build.yml older than the ECR/multi-env tagging change.
+              TAG=$(jq -r .tag "$METADATA_FILE")
+              REPOSITORY=$(jq -r .repository "$METADATA_FILE")
+            fi
+            BRANCH=$(jq -r .branch     "$METADATA_FILE")
+            COMMIT_SHA=$(jq -r .commit "$METADATA_FILE")
+
+            # Backward compatibility: metadata artifacts produced by a build.yml older
+            # than this change won't have a "type" field. Fall back to the legacy
+            # component=="web" convention in that case.
+            TYPE=$(jq -r '.type // empty' "$METADATA_FILE")
+            if [[ -z "$TYPE" || "$TYPE" == "null" ]]; then
+              if [[ "$COMPONENT" == "web" ]]; then TYPE="web"; else TYPE="service"; fi
+            fi
 
             case "${{ steps.env.outputs.environment }}" in
               "prod")    ENV_NAME="Production" ;;
@@ -283,7 +330,7 @@ jobs:
             # To add a new instance: create the folder + values.yml in the GitOps repo.
             # To remove an instance: delete the folder from the GitOps repo.
             # ──────────────────────────────────────────────────────────────
-            if [[ "$COMPONENT" == "web" ]]; then
+            if [[ "$TYPE" == "web" ]]; then
               PROJECT_BASE="${{ env.GITOPS_REPO_PATH }}/web/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}"
             else
               PROJECT_BASE="${{ env.GITOPS_REPO_PATH }}/microservices/${{ steps.env.outputs.environment }}/${{ inputs.project_name }}"
@@ -296,13 +343,13 @@ jobs:
 
             if [[ -z "$INSTANCE_DIRS" ]]; then
               echo "✅ No existing instances found for $COMPONENT — deploying as base instance"
-              deploy_instance "$COMPONENT" "$TAG" "$REPOSITORY" "$BRANCH" "$COMMIT_SHA" "$ENV_NAME" "$COMPONENT"
+              deploy_instance "$COMPONENT" "$TAG" "$REPOSITORY" "$BRANCH" "$COMMIT_SHA" "$ENV_NAME" "$COMPONENT" "$TYPE"
             else
               echo "📂 Instances found for $COMPONENT: $(echo "$INSTANCE_DIRS" | xargs -n1 basename | paste -sd', ' -)"
               while IFS= read -r INSTANCE_PATH; do
                 INSTANCE_FOLDER=$(basename "$INSTANCE_PATH")
                 echo "✅ Deploying $INSTANCE_FOLDER (component=$COMPONENT) tag=$TAG"
-                deploy_instance "$COMPONENT" "$TAG" "$REPOSITORY" "$BRANCH" "$COMMIT_SHA" "$ENV_NAME" "$INSTANCE_FOLDER"
+                deploy_instance "$COMPONENT" "$TAG" "$REPOSITORY" "$BRANCH" "$COMMIT_SHA" "$ENV_NAME" "$INSTANCE_FOLDER" "$TYPE"
               done <<< "$INSTANCE_DIRS"
             fi
           done
@@ -321,6 +368,7 @@ jobs:
           cd ${{ env.GITOPS_REPO_PATH }}
           git config user.name github-actions
           git config user.email github-actions@github.com
+          git remote set-url origin "https://x-access-token:${{ secrets.gh_gitops_token }}@github.com/${{ env.GITOPS_REPO }}.git"
           git add .
 
           if git diff --staged --quiet; then
@@ -333,6 +381,7 @@ jobs:
 
       - name: Open PR for production deployment
         if: steps.params.outputs.environment == 'prod'
+        id: create-pr
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.gh_gitops_token }}
@@ -352,3 +401,9 @@ jobs:
           commit-message: "🚀 Release ${{ inputs.project_name }} Commit: ${{ steps.metadata.outputs.commit_sha }}  Environment: ${{ steps.env.outputs.environment_upper }}"
           delete-branch: true
           labels: release-${{ inputs.project_name }}
+
+      - name: Surface PR link in job summary
+        if: steps.params.outputs.environment == 'prod' && steps.create-pr.outputs.pull-request-url
+        run: |
+          echo "### 🚀 Production release PR" >> $GITHUB_STEP_SUMMARY
+          echo "[${{ steps.create-pr.outputs.pull-request-url }}](${{ steps.create-pr.outputs.pull-request-url }})" >> $GITHUB_STEP_SUMMARY
