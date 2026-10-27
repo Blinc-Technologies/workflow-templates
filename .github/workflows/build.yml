@@ -246,6 +246,10 @@ jobs:
 
       - name: Build and push
         uses: docker/build-push-action@v7
+        env:
+          # v6+ uploads a .dockerbuild artifact per build (90 day retention), which exhausted the artifact quota
+          DOCKER_BUILD_RECORD_UPLOAD: false
+          DOCKER_BUILD_SUMMARY: false
         with:
           context: .
           file: ${{ matrix.path }}/Dockerfile
@@ -253,7 +257,7 @@ jobs:
           tags: ${{ steps.tags.outputs.value }}
           platforms: ${{ steps.tags.outputs.platforms }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=min
           provenance: false
           build-args: |
             ${{ steps.build-args.outputs.custom_args }}
