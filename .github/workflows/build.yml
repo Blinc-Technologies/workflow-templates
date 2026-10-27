@@ -285,7 +285,9 @@ jobs:
               timestamp:$timestamp}' \
             > ${{ matrix.component }}.json
 
+      # TEMPORARY: non-blocking while the org artifact storage quota is exhausted (resets Nov 1)
       - uses: actions/upload-artifact@v7
+        continue-on-error: true
         if: needs.prepare.outputs.should_release == 'true'
         with:
           name: metadata-${{ matrix.component }}
@@ -295,6 +297,8 @@ jobs:
   artifacts-upload:
     needs: [prepare, build]
     if: needs.prepare.outputs.should_release == 'true'
+    # TEMPORARY: non-blocking while the org artifact storage quota is exhausted (resets Nov 1)
+    continue-on-error: true
     runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     steps:
       - uses: actions/download-artifact@v8
@@ -315,7 +319,7 @@ jobs:
         with:
           name: release-artifacts
           path: metadata
-          retention-days: 90
+          retention-days: 30
 
       - name: Delete temporary artifacts
         uses: geekyeggo/delete-artifact@v6
