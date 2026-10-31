@@ -111,8 +111,32 @@ jobs:
             fi
           fi
 
+      # workflow_run fires for every successful Build on main, including ones that published nothing
+      # (workflow_dispatch without create_release, or no matching components). Skip those quietly;
+      # a manual or tag release pointing at such a run is a mistake, so fail it loudly instead.
+      - name: Check for release artifacts
+        id: artifacts
+        env:
+          GH_TOKEN: ${{ secrets.gh_actions_token }}
+        run: |
+          RUN_ID="${{ steps.params.outputs.run_id }}"
+          COUNT=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts?name=release-artifacts" \
+            --jq '[.artifacts[] | select(.expired | not)] | length')
+
+          if [[ "$COUNT" -gt 0 ]]; then
+            echo "✅ Build run $RUN_ID has release artifacts."
+            echo "found=true" >> $GITHUB_OUTPUT
+          elif [[ "${{ inputs.trigger_type }}" == "workflow_run" ]]; then
+            echo "::notice::Build run $RUN_ID published no release artifacts (built without create_release, or nothing to build) -- skipping release."
+            echo "found=false" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Build run $RUN_ID has no release artifacts (or they have expired)."
+            echo "   Re-run the build with 'create_release=true' on main, then point this release at that run."
+            exit 1
+          fi
+
       - name: Download Artifacts
-        if: inputs.trigger_type == 'workflow_run'
+        if: inputs.trigger_type == 'workflow_run' && steps.artifacts.outputs.found == 'true'
         uses: actions/download-artifact@v8
         with:
           github-token: ${{ secrets.gh_actions_token }}
@@ -122,6 +146,7 @@ jobs:
 
       - name: Resolve target environment
         id: target
+        if: steps.artifacts.outputs.found == 'true'
         run: |
           if [[ "${{ inputs.trigger_type }}" != "workflow_run" ]]; then
             echo "environment=${{ steps.params.outputs.environment }}" >> $GITHUB_OUTPUT
@@ -183,8 +208,8 @@ jobs:
         run: |
           if ! ls releases/*.json >/dev/null 2>&1; then
             echo "❌ No release metadata found in the downloaded artifact."
-            echo "   This likely means the triggering build workflow ran with 'should_deploy=false'."
-            echo "   Please trigger the build again with 'should_deploy=true' or run this release workflow manually pointing to a build run ID that generated artifacts."
+            echo "   This likely means the triggering build workflow ran with 'create_release=false'."
+            echo "   Please trigger the build again with 'create_release=true' or run this release workflow manually pointing to a build run ID that generated artifacts."
             exit 1
           fi
           echo "✅ Release metadata found."
