@@ -270,9 +270,11 @@ jobs:
         run: |
           # staging and prod share one AWS account/ECR repo, distinguished only by tag prefix.
           # An empty registries.<env> means this specific build was never pushed there.
+          # environment is the build's target input, or "auto" when none was given (test + staging + prod).
           jq -nc \
             --arg component "${{ matrix.component }}" \
             --arg type "${{ matrix.type }}" \
+            --arg environment "${{ inputs.environment || 'auto' }}" \
             --arg branch "${{ github.ref_name }}" \
             --arg commit "${{ github.sha }}" \
             --arg base_tag "${{ steps.image-tag.outputs.value }}" \
@@ -280,7 +282,7 @@ jobs:
             --arg staging_repo "${{ steps.tags.outputs.staging_repo }}" \
             --arg prod_repo "${{ steps.tags.outputs.prod_repo }}" \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{component:$component,type:$type,branch:$branch,commit:$commit,base_tag:$base_tag,
+            '{component:$component,type:$type,environment:$environment,branch:$branch,commit:$commit,base_tag:$base_tag,
               registries:{test:$test_repo, staging:$staging_repo, prod:$prod_repo},
               timestamp:$timestamp}' \
             > ${{ matrix.component }}.json
