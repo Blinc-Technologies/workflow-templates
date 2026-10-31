@@ -56,9 +56,13 @@ env:
   GITOPS_REPO_PATH: blinc-gitops
 
 jobs:
-  release:
+  # Decides the target environment before the release job starts, so that job can run under the
+  # matching GitHub environment (its vars, e.g. NAMESPACE, and protection rules).
+  resolve:
     runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
-    environment: ${{ inputs.environment || 'test' }}
+    outputs:
+      environment: ${{ steps.target.outputs.environment }}
+      run_id: ${{ steps.params.outputs.run_id }}
     if: >
       inputs.trigger_type == 'workflow_dispatch' ||
       inputs.trigger_type == 'push_tag' ||
@@ -73,7 +77,7 @@ jobs:
         id: params
         run: |
           if [[ "${{ inputs.trigger_type }}" == "workflow_run" ]]; then
-            echo "environment=test" >> $GITHUB_OUTPUT
+            # environment is picked from the build's metadata in the next steps
             echo "run_id=${{ inputs.workflow_run_id }}" >> $GITHUB_OUTPUT
 
           elif [[ "${{ inputs.trigger_type }}" == "push_tag" ]]; then
@@ -108,10 +112,69 @@ jobs:
           fi
 
       - name: Download Artifacts
+        if: inputs.trigger_type == 'workflow_run'
         uses: actions/download-artifact@v8
         with:
           github-token: ${{ secrets.gh_actions_token }}
           run-id: ${{ steps.params.outputs.run_id }}
+          name: release-artifacts
+          path: releases/
+
+      - name: Resolve target environment
+        id: target
+        run: |
+          if [[ "${{ inputs.trigger_type }}" != "workflow_run" ]]; then
+            echo "environment=${{ steps.params.outputs.environment }}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if ! ls releases/*.json >/dev/null 2>&1; then
+            echo "❌ No release metadata found in the downloaded artifact."
+            exit 1
+          fi
+
+          # Auto-triggered runs follow the build's target environment: a default ("auto") build deploys
+          # to test, a staging build deploys to staging. Prod is never auto-deployed -- it goes through a tag push.
+          BUILD_ENV=$(jq -sr '[.[].environment // empty] | first // empty' releases/*.json)
+          echo "📦 Build target environment: ${BUILD_ENV:-<not recorded>}"
+
+          ENVIRONMENT=""
+          case "$BUILD_ENV" in
+            test|staging) ENVIRONMENT="$BUILD_ENV" ;;
+            prod)         ;;
+            *)
+              # "auto", or metadata from a build.yml that didn't record environment: infer it from the
+              # registries the build pushed to. No base_tag means older than multi-env tagging (test only).
+              for ENV in test staging; do
+                if jq -se --arg env "$ENV" \
+                  'any(.[]; (.base_tag == null and $env == "test") or ((.registries[$env] // "") != ""))' \
+                  releases/*.json >/dev/null; then
+                  ENVIRONMENT="$ENV"
+                  break
+                fi
+              done
+              ;;
+          esac
+
+          if [[ -z "$ENVIRONMENT" ]]; then
+            echo "ℹ️ Build run ${{ steps.params.outputs.run_id }} has no test or staging image (prod-only build). Prod is released via a tag push -- skipping."
+          else
+            echo "✅ Auto-release target: $ENVIRONMENT"
+          fi
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+
+  release:
+    needs: resolve
+    if: needs.resolve.outputs.environment != ''
+    runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
+    environment: ${{ needs.resolve.outputs.environment }}
+
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ secrets.gh_actions_token }}
+          run-id: ${{ needs.resolve.outputs.run_id }}
           name: release-artifacts
           path: releases/
 
@@ -141,14 +204,14 @@ jobs:
       - name: Set environment variables
         id: env
         run: |
-          ENVIRONMENT="${{ steps.params.outputs.environment }}"
+          ENVIRONMENT="${{ needs.resolve.outputs.environment }}"
           echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
 
           ENVIRONMENT_UPPER=$(echo "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')
           echo "environment_upper=$ENVIRONMENT_UPPER" >> $GITHUB_OUTPUT
 
       - name: Enforce prod deploy policy (main only and must be tagged)
-        if: steps.params.outputs.environment == 'prod'
+        if: needs.resolve.outputs.environment == 'prod'
         run: |
           IFS=',' read -ra COMPONENTS <<< "${{ steps.components.outputs.components }}"
           for COMPONENT in "${COMPONENTS[@]}"; do
@@ -363,7 +426,7 @@ jobs:
           echo "short_sha=${COMMIT_SHA:0:7}" >> $GITHUB_OUTPUT
 
       - name: Push to GitOps repo (test/staging)
-        if: steps.params.outputs.environment != 'prod'
+        if: needs.resolve.outputs.environment != 'prod'
         run: |
           cd ${{ env.GITOPS_REPO_PATH }}
           git config user.name github-actions
@@ -380,7 +443,7 @@ jobs:
           fi
 
       - name: Open PR for production deployment
-        if: steps.params.outputs.environment == 'prod'
+        if: needs.resolve.outputs.environment == 'prod'
         id: create-pr
         uses: peter-evans/create-pull-request@v6
         with:
@@ -403,7 +466,7 @@ jobs:
           labels: release-${{ inputs.project_name }}
 
       - name: Surface PR link in job summary
-        if: steps.params.outputs.environment == 'prod' && steps.create-pr.outputs.pull-request-url
+        if: needs.resolve.outputs.environment == 'prod' && steps.create-pr.outputs.pull-request-url
         run: |
           echo "### 🚀 Production release PR" >> $GITHUB_STEP_SUMMARY
           echo "[${{ steps.create-pr.outputs.pull-request-url }}](${{ steps.create-pr.outputs.pull-request-url }})" >> $GITHUB_STEP_SUMMARY
