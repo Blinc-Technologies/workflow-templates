@@ -470,7 +470,7 @@ jobs:
       - name: Open PR for production deployment
         if: needs.resolve.outputs.environment == 'prod'
         id: create-pr
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.gh_gitops_token }}
           base: main

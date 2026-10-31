@@ -159,7 +159,7 @@ jobs:
       # the auto case (no environment input -> tag everything) and an explicit staging/prod pick.
       - name: Configure AWS credentials
         if: needs.prepare.outputs.should_release == 'true' && (github.ref_name == 'main' || github.ref_name == 'master') && inputs.environment != 'test'
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.aws_role_arn }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -240,7 +240,7 @@ jobs:
 
       - name: Set up QEMU
         if: contains(steps.tags.outputs.platforms, 'arm64')
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
 
