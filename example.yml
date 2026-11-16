@@ -1,12 +1,19 @@
 # File: .github/workflows/release.yml
 # This goes in ANY repository that wants to use the reusable release workflow
 # Example: blinc-payment-service, blinc-notification-service, etc.
+#
+# How shipping works:
+#   * Merge to main            -> Build (test)   -> Release deploys test.
+#   * Run Build, env=staging   -> images for test + staging -> Release deploys staging only.
+#   * Run Build, env=prod      -> images for test + staging + prod -> Release opens the prod
+#                                 GitOps PR only. No git tag needed.
+#   * Run Release, env=<any>   -> ship an image that's already built to that tier, e.g. the test or
+#     (run_id optional)           staging image from a prod build, or retag a staging build to prod
+#                                 in ECR. No rebuild.
 
 name: Release
 
 on:
-  push:
-    tags: ['v*']
   workflow_run:
     workflows: ["Build"]
     types: [completed]
@@ -15,22 +22,31 @@ on:
       environment:
         required: true
         description: 'test | staging | prod'
-        default: 'test'
+        default: 'prod'
         type: choice
         options:
           - test
           - staging
           - prod
       components:
-        required: true
-        description: 'Comma-separated list of components to deploy'
-        default: 'api, worker, scheduler'
+        required: false
+        description: 'Comma-separated list of components to deploy (empty = all)'
+        default: ''
       run_id:
-        required: true
-        description: 'Run ID of the build workflow'
+        required: false
+        description: 'Build run ID (empty = latest successful Build of the selected branch head)'
+        default: ''
+  # Optional: pushing a v* tag still releases that commit to prod, but it is no longer required.
+  # push:
+  #   tags: ['v*']
 
 jobs:
   release:
+    # id-token: write lets the release assume aws_role_arn to retag images in ECR when promoting
+    # (e.g. staging -> prod). A reusable workflow can never get more than the caller grants.
+    permissions:
+      id-token: write
+      contents: read
     uses: Blinc-Technologies/workflow-templates/.github/workflows/release.yml@main
     with:
       # A tag push only ever means prod -- forcing it here (rather than leaving it to
@@ -47,6 +63,7 @@ jobs:
     secrets:
       gh_actions_token: ${{ secrets.GH_ACTIONS_TOKEN }}
       gh_gitops_token: ${{ secrets.GH_GITOPS_TOKEN }}
+      aws_role_arn: ${{ secrets.AWS_ROLE_ARN }}
 
 # ────────────────────────────────────────────────────────────
 # Example Build workflow for a mixed backend + frontend repo:
@@ -59,16 +76,11 @@ jobs:
 #   workflow_dispatch:
 #     inputs:
 #       environment:
-#         description: 'Leave blank to build + tag for every environment (main only). Pick one to build just that tag.'
+#         description: 'Highest environment to ship to (lower ones are included). Blank = test.'
 #         required: false
 #         type: choice
 #         default: ''
 #         options: ['', test, staging, prod]
-#       create_release:
-#         description: 'Force release even on workflow_dispatch'
-#         default: 'false'
-#         type: choice
-#         options: ['true', 'false']
 #
 #   jobs:
 #     build:
@@ -81,9 +93,9 @@ jobs:
 #       uses: Blinc-Technologies/workflow-templates/.github/workflows/build.yml@main
 #       with:
 #         environment: ${{ inputs.environment }}
+#         # default_environment: staging   # make every merge to main go to test + staging
 #         project_name: ${{ vars.PROJECT_NAME }}
 #         components_to_build: 'api, worker, web'
-#         create_release: ${{ inputs.create_release || 'false' }}
 #       secrets:
 #         aws_role_arn: ${{ secrets.AWS_ROLE_ARN }}
 # ────────────────────────────────────────────────────────────
