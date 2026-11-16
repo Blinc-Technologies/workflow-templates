@@ -1,20 +1,32 @@
 name: Reusable Release Workflow
 
+# Deploys a Build run's images through GitOps.
+#
+#   * Auto (workflow_run): deploys ONLY the tier the build targeted. A prod build opens the prod
+#     GitOps PR, a staging build deploys staging, a test build deploys test -- no tag or manual run.
+#     The images for the lower tiers were built as well, ready to be released without a rebuild.
+#   * Manual (workflow_dispatch): deploys one environment. run_id is optional (defaults to the
+#     latest successful Build of the commit you run it from). Use it to ship an already-built image
+#     to another tier, e.g. a prod build's test/staging images. If the build has no image for the
+#     requested tier but does have one in ECR (e.g. staging -> prod), the existing image is retagged
+#     in ECR -- no rebuild.
+#   * Tag push (push_tag): still supported as a shortcut for "manual prod", but no longer required.
+
 on:
   workflow_call:
     inputs:
       environment:
         required: false
         type: string
-        description: 'test | staging | prod (optional for auto-triggered runs)'
+        description: 'test | staging | prod (manual / tag runs only)'
       components:
         required: false
         type: string
-        description: 'Comma-separated list (optional for auto-triggered runs)'
+        description: 'Comma-separated list. Empty = every component in the build.'
       run_id:
         required: false
         type: string
-        description: 'Run ID of the build workflow (optional for auto-triggered runs)'
+        description: 'Run ID of the build workflow. Empty = latest successful Build of this commit.'
       project_name:
         required: true
         type: string
@@ -50,18 +62,24 @@ on:
         required: true
       gh_gitops_token:
         required: true
+      aws_role_arn:
+        required: false
+        description: >
+          IAM role (OIDC) allowed to read/put images in ECR. Only needed to promote an existing
+          image to a tier it wasn't built for (e.g. staging -> prod). The caller must then grant
+          `id-token: write`.
 
 env:
   GITOPS_REPO: ${{ inputs.gitops_repo }}
   GITOPS_REPO_PATH: blinc-gitops
 
 jobs:
-  # Decides the target environment before the release job starts, so that job can run under the
-  # matching GitHub environment (its vars, e.g. NAMESPACE, and protection rules).
+  # Decides the target environment(s) before the release job starts, so each release job can run
+  # under the matching GitHub environment (its vars, e.g. NAMESPACE, and protection rules).
   resolve:
     runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
     outputs:
-      environment: ${{ steps.target.outputs.environment }}
+      environments: ${{ steps.target.outputs.environments }}
       run_id: ${{ steps.params.outputs.run_id }}
     if: >
       inputs.trigger_type == 'workflow_dispatch' ||
@@ -75,45 +93,55 @@ jobs:
     steps:
       - name: Determine run parameters
         id: params
+        env:
+          GH_TOKEN: ${{ secrets.gh_actions_token }}
         run: |
-          if [[ "${{ inputs.trigger_type }}" == "workflow_run" ]]; then
-            # environment is picked from the build's metadata in the next steps
-            echo "run_id=${{ inputs.workflow_run_id }}" >> $GITHUB_OUTPUT
+          RUN_ID=""
+          ENVIRONMENT=""
+          case "${{ inputs.trigger_type }}" in
+            workflow_run)
+              # environment(s) are picked from the build's metadata in the next steps
+              RUN_ID="${{ inputs.workflow_run_id }}"
+              ;;
+            push_tag)
+              ENVIRONMENT="prod"
+              ;;
+            *)
+              ENVIRONMENT="${{ inputs.environment }}"
+              RUN_ID="${{ inputs.run_id }}"
+              if [[ "$ENVIRONMENT" != "test" && "$ENVIRONMENT" != "staging" && "$ENVIRONMENT" != "prod" ]]; then
+                echo "❌ Invalid environment: $ENVIRONMENT"
+                echo "   Valid environments are: test, staging, prod"
+                exit 1
+              fi
+              ;;
+          esac
 
-          elif [[ "${{ inputs.trigger_type }}" == "push_tag" ]]; then
-            echo "environment=prod" >> $GITHUB_OUTPUT
-
-            # A tag push only carries a commit SHA, not a build run_id -- resolve it by
-            # asking the API for the most recent successful Build run against that exact
-            # commit. Assumes the consuming repo's build workflow file is build.yml.
-            RUN_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.gh_actions_token }}" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/build.yml/runs?head_sha=${{ github.sha }}&status=success&per_page=1" \
-              | jq -r '.workflow_runs[0].id // empty')
+          if [[ -z "$RUN_ID" ]]; then
+            # No run_id (tag push, or a manual run that left it blank): use the most recent successful
+            # Build of this exact commit that published release artifacts.
+            # Assumes the consuming repo's build workflow file is build.yml.
+            for CANDIDATE in $(gh api "repos/${{ github.repository }}/actions/workflows/build.yml/runs?head_sha=${{ github.sha }}&status=success&per_page=20" \
+                                 --jq '.workflow_runs[].id'); do
+              COUNT=$(gh api "repos/${{ github.repository }}/actions/runs/$CANDIDATE/artifacts?name=release-artifacts" \
+                        --jq '[.artifacts[] | select(.expired | not)] | length')
+              if [[ "$COUNT" -gt 0 ]]; then RUN_ID="$CANDIDATE"; break; fi
+            done
 
             if [[ -z "$RUN_ID" ]]; then
-              echo "❌ No successful Build run found for commit ${{ github.sha }}."
-              echo "   This commit must already have gone through the normal main-branch Build pipeline before it can be tagged for a prod release."
+              echo "❌ No successful Build run with release artifacts found for commit ${{ github.sha }}."
+              echo "   Run Build on main (pick an environment to build for), or pass run_id explicitly."
               exit 1
             fi
-
-            echo "✅ Resolved Build run $RUN_ID for tagged commit ${{ github.sha }}"
-            echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
-
-          else
-            echo "environment=${{ inputs.environment }}" >> $GITHUB_OUTPUT
-            echo "run_id=${{ inputs.run_id }}" >> $GITHUB_OUTPUT
-
-            ENVIRONMENT="${{ inputs.environment }}"
-            if [[ "$ENVIRONMENT" != "test" && "$ENVIRONMENT" != "staging" && "$ENVIRONMENT" != "prod" ]]; then
-              echo "❌ Invalid environment: $ENVIRONMENT"
-              echo "   Valid environments are: test, staging, prod"
-              exit 1
-            fi
+            echo "✅ Resolved Build run $RUN_ID for commit ${{ github.sha }}"
           fi
 
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+
       # workflow_run fires for every successful Build on main, including ones that published nothing
-      # (workflow_dispatch without create_release, or no matching components). Skip those quietly;
-      # a manual or tag release pointing at such a run is a mistake, so fail it loudly instead.
+      # (a verification-only build, or no matching components). Skip those quietly; a manual or tag
+      # release pointing at such a run is a mistake, so fail it loudly instead.
       - name: Check for release artifacts
         id: artifacts
         env:
@@ -127,11 +155,11 @@ jobs:
             echo "✅ Build run $RUN_ID has release artifacts."
             echo "found=true" >> $GITHUB_OUTPUT
           elif [[ "${{ inputs.trigger_type }}" == "workflow_run" ]]; then
-            echo "::notice::Build run $RUN_ID published no release artifacts (built without create_release, or nothing to build) -- skipping release."
+            echo "::notice::Build run $RUN_ID published no release artifacts (verification build, or nothing to build) -- skipping release."
             echo "found=false" >> $GITHUB_OUTPUT
           else
             echo "❌ Build run $RUN_ID has no release artifacts (or they have expired)."
-            echo "   Re-run the build with 'create_release=true' on main, then point this release at that run."
+            echo "   Run Build on main with the environment you want, then release that run."
             exit 1
           fi
 
@@ -144,12 +172,16 @@ jobs:
           name: release-artifacts
           path: releases/
 
-      - name: Resolve target environment
+      - name: Resolve target environments
         id: target
-        if: steps.artifacts.outputs.found == 'true'
         run: |
+          if [[ "${{ steps.artifacts.outputs.found }}" != "true" ]]; then
+            echo "environments=[]" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
           if [[ "${{ inputs.trigger_type }}" != "workflow_run" ]]; then
-            echo "environment=${{ steps.params.outputs.environment }}" >> $GITHUB_OUTPUT
+            echo "environments=[\"${{ steps.params.outputs.environment }}\"]" >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -158,41 +190,48 @@ jobs:
             exit 1
           fi
 
-          # Auto-triggered runs follow the build's target environment: a default ("auto") build deploys
-          # to test, a staging build deploys to staging. Prod is never auto-deployed -- it goes through a tag push.
-          BUILD_ENV=$(jq -sr '[.[].environment // empty] | first // empty' releases/*.json)
-          echo "📦 Build target environment: ${BUILD_ENV:-<not recorded>}"
-
-          ENVIRONMENT=""
-          case "$BUILD_ENV" in
-            test|staging) ENVIRONMENT="$BUILD_ENV" ;;
-            prod)         ;;
-            *)
-              # "auto", or metadata from a build.yml that didn't record environment: infer it from the
-              # registries the build pushed to. No base_tag means older than multi-env tagging (test only).
-              for ENV in test staging; do
-                if jq -se --arg env "$ENV" \
-                  'any(.[]; (.base_tag == null and $env == "test") or ((.registries[$env] // "") != ""))' \
-                  releases/*.json >/dev/null; then
-                  ENVIRONMENT="$ENV"
-                  break
-                fi
-              done
-              ;;
-          esac
-
-          if [[ -z "$ENVIRONMENT" ]]; then
-            echo "ℹ️ Build run ${{ steps.params.outputs.run_id }} has no test or staging image (prod-only build). Prod is released via a tag push -- skipping."
+          if jq -se 'any(.[]; has("environments"))' releases/*.json >/dev/null; then
+            # Current build.yml: deploy only the tier the build targeted (prod = GitOps PR). The lower
+            # tiers' images were built too, but stay on the shelf until someone releases them.
+            ENVS=$(jq -sc '[.[].environment // empty] | unique' releases/*.json)
           else
-            echo "✅ Auto-release target: $ENVIRONMENT"
+            # Metadata from an older build.yml: keep the old behaviour of a single auto-deploy to
+            # test or staging, inferred from the build's target / the registries it pushed to.
+            BUILD_ENV=$(jq -sr '[.[].environment // empty] | first // empty' releases/*.json)
+            ENV=""
+            case "$BUILD_ENV" in
+              test|staging) ENV="$BUILD_ENV" ;;
+              prod)         ;;
+              *)
+                for CANDIDATE in test staging; do
+                  if jq -se --arg env "$CANDIDATE" \
+                    'any(.[]; (.base_tag == null and $env == "test") or ((.registries[$env] // "") != ""))' \
+                    releases/*.json >/dev/null; then
+                    ENV="$CANDIDATE"
+                    break
+                  fi
+                done
+                ;;
+            esac
+            ENVS=$(jq -nc --arg e "$ENV" 'if $e == "" then [] else [$e] end')
           fi
-          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+
+          # Deploy in tier order: test, staging, then prod.
+          ENVS=$(jq -nc --argjson e "$ENVS" '["test","staging","prod"] | map(select(. as $t | $e | index($t)))')
+          echo "✅ Auto-release targets: $ENVS"
+          echo "environments=$ENVS" >> $GITHUB_OUTPUT
 
   release:
     needs: resolve
-    if: needs.resolve.outputs.environment != ''
+    if: needs.resolve.outputs.environments != '' && needs.resolve.outputs.environments != '[]'
     runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
-    environment: ${{ needs.resolve.outputs.environment }}
+    environment: ${{ matrix.environment }}
+    strategy:
+      fail-fast: false
+      # One environment at a time (test -> staging -> prod), which also avoids racing GitOps pushes.
+      max-parallel: 1
+      matrix:
+        environment: ${{ fromJson(needs.resolve.outputs.environments || '[]') }}
 
     steps:
       - name: Download Artifacts
@@ -208,13 +247,12 @@ jobs:
         run: |
           if ! ls releases/*.json >/dev/null 2>&1; then
             echo "❌ No release metadata found in the downloaded artifact."
-            echo "   This likely means the triggering build workflow ran with 'create_release=false'."
-            echo "   Please trigger the build again with 'create_release=true' or run this release workflow manually pointing to a build run ID that generated artifacts."
+            echo "   Run Build on main with the environment you want, then release that run."
             exit 1
           fi
           echo "✅ Release metadata found."
 
-          if [[ "${{ inputs.trigger_type }}" == "workflow_run" || ! -n "${{ inputs.components }}" ]]; then
+          if [[ "${{ inputs.trigger_type }}" == "workflow_run" || -z "${{ inputs.components }}" ]]; then
             COMPONENTS=$(ls releases/*.json | xargs -n1 basename | sed 's/\.json//g' | paste -sd, -)
             echo "📦 Auto-detected components: $COMPONENTS"
           else
@@ -229,14 +267,16 @@ jobs:
       - name: Set environment variables
         id: env
         run: |
-          ENVIRONMENT="${{ needs.resolve.outputs.environment }}"
+          ENVIRONMENT="${{ matrix.environment }}"
           echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
 
           ENVIRONMENT_UPPER=$(echo "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')
           echo "environment_upper=$ENVIRONMENT_UPPER" >> $GITHUB_OUTPUT
 
-      - name: Enforce prod deploy policy (main only and must be tagged)
-        if: needs.resolve.outputs.environment == 'prod'
+      # Prod's real gate is the GitOps PR (plus any reviewers on the prod GitHub environment);
+      # a git tag is no longer required.
+      - name: Enforce prod deploy policy (main only)
+        if: matrix.environment == 'prod'
         run: |
           IFS=',' read -ra COMPONENTS <<< "${{ steps.components.outputs.components }}"
           for COMPONENT in "${COMPONENTS[@]}"; do
@@ -248,26 +288,128 @@ jobs:
             fi
 
             BRANCH=$(jq -r .branch "$FILE")
-            COMMIT_HASH=$(jq -r .commit "$FILE")
-
             if [[ "$BRANCH" != "main" ]]; then
               echo "❌ Deployment to prod is only allowed from main. Found: $BRANCH"
               exit 1
             fi
-
-            # git/matching-refs (not git/refs) -- the latter returns a bare object instead
-            # of a 1-element array when exactly one tag matches, breaking this jq pipeline.
-            TAG_EXISTS=$(curl -s -H "Authorization: Bearer ${{ secrets.gh_actions_token }}" \
-              "https://api.github.com/repos/${{ github.repository }}/git/matching-refs/tags" \
-              | jq --arg sha "$COMMIT_HASH" '[.[] | select(.object.sha == $sha)] | length')
-
-            if [[ "$TAG_EXISTS" -eq 0 ]]; then
-              echo "❌ Commit $COMMIT_HASH is not tagged. Production deployments require a Git tag."
-              exit 1
-            else
-              echo "✅ Commit $COMMIT_HASH is tagged. OK to deploy."
-            fi
           done
+          echo "✅ All components were built from main."
+
+      # Build once, tag many: if this build has no image for the target tier but already pushed the
+      # same image to ECR under another tier (staging and prod share one repo), retag it instead of
+      # rebuilding. Frontends can't be promoted -- their env vars are baked in per tier.
+      - name: Plan image promotions
+        id: promote-plan
+        env:
+          HAS_AWS_ROLE: ${{ secrets.aws_role_arn != '' }}
+        run: |
+          ENV="${{ matrix.environment }}"
+          PLAN=""
+          REGION=""
+
+          IFS=',' read -ra COMPONENTS <<< "${{ steps.components.outputs.components }}"
+          for COMPONENT in "${COMPONENTS[@]}"; do
+            COMPONENT=$(echo "$COMPONENT" | xargs)
+            FILE="releases/$COMPONENT.json"
+            if [[ ! -f "$FILE" ]]; then
+              echo "❌ Release metadata for $COMPONENT not found"
+              exit 1
+            fi
+
+            BASE_TAG=$(jq -r '.base_tag // empty' "$FILE")
+            # Legacy metadata (pre multi-env tagging) is handled by the manifest step.
+            [[ -z "$BASE_TAG" ]] && continue
+            # Already built for this tier -- nothing to promote.
+            [[ -n "$(jq -r --arg env "$ENV" '.registries[$env] // empty' "$FILE")" ]] && continue
+
+            TYPE=$(jq -r '.type // "service"' "$FILE")
+            if [[ "$ENV" == "test" ]]; then
+              echo "❌ $COMPONENT has no test image in this build, and ECR images aren't copied back to the test registry. Run Build with environment=test (or higher)."
+              exit 1
+            fi
+            if [[ "$TYPE" == "web" ]]; then
+              echo "❌ $COMPONENT is a frontend: its env vars are baked in at build time, so another tier's image can't be reused for $ENV."
+              echo "   Run Build on main with environment=$ENV (that also redeploys the tiers below it)."
+              exit 1
+            fi
+
+            SRC_ENV=""
+            for CANDIDATE in staging prod; do
+              if [[ "$CANDIDATE" != "$ENV" && -n "$(jq -r --arg env "$CANDIDATE" '.registries[$env] // empty' "$FILE")" ]]; then
+                SRC_ENV="$CANDIDATE"
+                break
+              fi
+            done
+            if [[ -z "$SRC_ENV" ]]; then
+              echo "❌ Build run ${{ needs.resolve.outputs.run_id }} only produced a test image for $COMPONENT (amd64, test registry) -- there is nothing in ECR to retag."
+              echo "   Run Build on main with environment=$ENV; it will deploy test, staging and $ENV in one go."
+              exit 1
+            fi
+
+            REPO=$(jq -r --arg env "$SRC_ENV" '.registries[$env]' "$FILE")
+            # <account>.dkr.ecr.<region>.amazonaws.com/<repo>
+            REGION=$(echo "${REPO%%/*}" | cut -d. -f4)
+            echo "🔁 $COMPONENT: will retag $SRC_ENV-$BASE_TAG -> $ENV-$BASE_TAG"
+            PLAN+="$COMPONENT $REPO $SRC_ENV-$BASE_TAG $ENV-$BASE_TAG"$'\n'
+          done
+
+          if [[ -n "$PLAN" && "$HAS_AWS_ROLE" != "true" ]]; then
+            echo "❌ Promotion needed but no aws_role_arn secret was passed to the release workflow."
+            echo "   Pass aws_role_arn and grant 'id-token: write' in the calling workflow, or rebuild with environment=$ENV."
+            exit 1
+          fi
+
+          echo "needed=$([[ -n "$PLAN" ]] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "region=$REGION" >> $GITHUB_OUTPUT
+          echo "plan<<EOF" >> $GITHUB_OUTPUT
+          echo -n "$PLAN" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Configure AWS credentials
+        if: steps.promote-plan.outputs.needed == 'true'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.aws_role_arn }}
+          aws-region: ${{ steps.promote-plan.outputs.region }}
+
+      - name: Promote images (retag in ECR, no rebuild)
+        if: steps.promote-plan.outputs.needed == 'true'
+        env:
+          PLAN: ${{ steps.promote-plan.outputs.plan }}
+        run: |
+          ENV="${{ matrix.environment }}"
+          while read -r COMPONENT REPO SRC DST; do
+            [[ -z "$COMPONENT" ]] && continue
+            REPO_NAME="${REPO#*/}"
+
+            RESP=$(aws ecr batch-get-image --repository-name "$REPO_NAME" --image-ids imageTag="$SRC" \
+              --accepted-media-types \
+                application/vnd.oci.image.index.v1+json \
+                application/vnd.docker.distribution.manifest.list.v2+json \
+                application/vnd.oci.image.manifest.v1+json \
+                application/vnd.docker.distribution.manifest.v2+json \
+              --output json)
+            MANIFEST=$(jq -r '.images[0].imageManifest // empty' <<< "$RESP")
+            MEDIA_TYPE=$(jq -r '.images[0].imageManifestMediaType // empty' <<< "$RESP")
+            if [[ -z "$MANIFEST" ]]; then
+              echo "❌ $REPO_NAME:$SRC not found in ECR ($(jq -c '.failures' <<< "$RESP")). It may have been removed by a lifecycle policy -- rebuild with environment=$ENV."
+              exit 1
+            fi
+
+            if OUT=$(aws ecr put-image --repository-name "$REPO_NAME" --image-tag "$DST" \
+                       --image-manifest "$MANIFEST" --image-manifest-media-type "$MEDIA_TYPE" 2>&1); then
+              echo "✅ $REPO_NAME: $SRC -> $DST"
+            elif grep -q ImageAlreadyExistsException <<< "$OUT"; then
+              echo "ℹ️ $REPO_NAME:$DST already points at this image"
+            else
+              echo "$OUT"
+              exit 1
+            fi
+
+            # Record the promoted image so the manifest step below picks it up.
+            FILE="releases/$COMPONENT.json"
+            jq --arg env "$ENV" --arg repo "$REPO" '.registries[$env] = $repo' "$FILE" > "$FILE.tmp" && mv "$FILE.tmp" "$FILE"
+          done <<< "$PLAN"
 
       - name: Checkout GitOps repo
         uses: actions/checkout@v6
@@ -373,10 +515,9 @@ jobs:
               exit 1
             fi
 
-            # build.yml pushes one image with an alias tag per environment (test-/staging-/prod-),
-            # sharing one ECR repo for staging+prod. Pick the alias for the environment we're
-            # actually deploying to -- an empty registries.<env> means this build never reached it
-            # (e.g. it wasn't built from main, or a specific --environment was picked at build time).
+            # build.yml pushes one image with an alias tag per tier (test-/staging-/prod-), sharing one
+            # ECR repo for staging+prod. Pick the alias for the environment we're actually deploying
+            # to -- the promotion step above has already filled registries.<env> if it retagged.
             BASE_TAG=$(jq -r '.base_tag // empty' "$METADATA_FILE")
             if [[ -n "$BASE_TAG" ]]; then
               REPOSITORY=$(jq -r --arg env "${{ steps.env.outputs.environment }}" '.registries[$env] // empty' "$METADATA_FILE")
@@ -451,7 +592,7 @@ jobs:
           echo "short_sha=${COMMIT_SHA:0:7}" >> $GITHUB_OUTPUT
 
       - name: Push to GitOps repo (test/staging)
-        if: needs.resolve.outputs.environment != 'prod'
+        if: matrix.environment != 'prod'
         run: |
           cd ${{ env.GITOPS_REPO_PATH }}
           git config user.name github-actions
@@ -461,14 +602,25 @@ jobs:
 
           if git diff --staged --quiet; then
             echo "ℹ️ No changes to commit"
-          else
-            git commit -m "🚀 Deploy ${{ inputs.project_name }} Commit: ${{ steps.metadata.outputs.commit_sha }}  Environment: ${{ steps.env.outputs.environment_upper }}"
-            git push origin main
-            echo "✅ Changes pushed to GitOps repository"
+            exit 0
           fi
 
+          git commit -m "🚀 Deploy ${{ inputs.project_name }} Commit: ${{ steps.metadata.outputs.commit_sha }}  Environment: ${{ steps.env.outputs.environment_upper }}"
+
+          # Other projects push to the same GitOps repo; rebase and retry if we lost the race.
+          for ATTEMPT in 1 2 3; do
+            if git push origin main; then
+              echo "✅ Changes pushed to GitOps repository"
+              exit 0
+            fi
+            echo "⚠️ Push rejected (attempt $ATTEMPT) -- rebasing onto latest main"
+            git pull --rebase origin main
+          done
+          echo "❌ Could not push to the GitOps repository after 3 attempts"
+          exit 1
+
       - name: Open PR for production deployment
-        if: needs.resolve.outputs.environment == 'prod'
+        if: matrix.environment == 'prod'
         id: create-pr
         uses: peter-evans/create-pull-request@v8
         with:
@@ -491,7 +643,7 @@ jobs:
           labels: release-${{ inputs.project_name }}
 
       - name: Surface PR link in job summary
-        if: needs.resolve.outputs.environment == 'prod' && steps.create-pr.outputs.pull-request-url
+        if: matrix.environment == 'prod' && steps.create-pr.outputs.pull-request-url
         run: |
           echo "### 🚀 Production release PR" >> $GITHUB_STEP_SUMMARY
           echo "[${{ steps.create-pr.outputs.pull-request-url }}](${{ steps.create-pr.outputs.pull-request-url }})" >> $GITHUB_STEP_SUMMARY
