@@ -2,15 +2,17 @@ name: Reusable Release Workflow
 
 # Deploys a Build run's images through GitOps.
 #
-#   * Auto (workflow_run): deploys ONLY the tier the build targeted. A prod build opens the prod
-#     GitOps PR, a staging build deploys staging, a test build deploys test -- no tag or manual run.
+#   * Auto (workflow_run): deploys ONLY the tier the build targeted. A staging build deploys staging,
+#     a test build deploys test. A prod build opens the prod GitOps PR only if the build's commit is
+#     already tagged; otherwise prod is skipped until the tag push releases it.
 #     The images for the lower tiers were built as well, ready to be released without a rebuild.
+#   * Prod, by any trigger, requires a git tag on the exact commit the build was made from.
 #   * Manual (workflow_dispatch): deploys one environment. run_id is optional (defaults to the
 #     latest successful Build of the commit you run it from). Use it to ship an already-built image
 #     to another tier, e.g. a prod build's test/staging images. If the build has no image for the
 #     requested tier but does have one in ECR (e.g. staging -> prod), the existing image is retagged
 #     in ECR -- no rebuild.
-#   * Tag push (push_tag): still supported as a shortcut for "manual prod", but no longer required.
+#   * Tag push (push_tag): releases prod from the latest successful Build of the tagged commit.
 
 on:
   workflow_call:
@@ -174,6 +176,8 @@ jobs:
 
       - name: Resolve target environments
         id: target
+        env:
+          GH_TOKEN: ${{ secrets.gh_actions_token }}
         run: |
           if [[ "${{ steps.artifacts.outputs.found }}" != "true" ]]; then
             echo "environments=[]" >> $GITHUB_OUTPUT
@@ -195,13 +199,12 @@ jobs:
             # tiers' images were built too, but stay on the shelf until someone releases them.
             ENVS=$(jq -sc '[.[].environment // empty] | unique' releases/*.json)
           else
-            # Metadata from an older build.yml: keep the old behaviour of a single auto-deploy to
-            # test or staging, inferred from the build's target / the registries it pushed to.
+            # Metadata from an older build.yml: deploy the build's explicit target (prod = GitOps PR),
+            # or for an "auto"/unrecorded build infer test/staging from the registries it pushed to.
             BUILD_ENV=$(jq -sr '[.[].environment // empty] | first // empty' releases/*.json)
             ENV=""
             case "$BUILD_ENV" in
-              test|staging) ENV="$BUILD_ENV" ;;
-              prod)         ;;
+              test|staging|prod) ENV="$BUILD_ENV" ;;
               *)
                 for CANDIDATE in test staging; do
                   if jq -se --arg env "$CANDIDATE" \
@@ -214,6 +217,21 @@ jobs:
                 ;;
             esac
             ENVS=$(jq -nc --arg e "$ENV" 'if $e == "" then [] else [$e] end')
+          fi
+
+          # Prod needs a git tag on the exact commit the build was made from. Usually the build finishes
+          # before anyone tags it, so drop prod here (the tag push then releases it); the release job
+          # re-checks the tag and fails hard if it is still missing.
+          if jq -ne --argjson e "$ENVS" '$e | index("prod")' >/dev/null; then
+            for COMMIT in $(jq -sr '[.[].commit // empty] | unique | .[]' releases/*.json); do
+              TAGS=$(gh api --paginate "repos/${{ github.repository }}/tags?per_page=100" \
+                       --jq ".[] | select(.commit.sha == \"$COMMIT\") | .name")
+              if [[ -z "$TAGS" ]]; then
+                echo "::notice::Build commit $COMMIT is not tagged -- skipping prod. Tag it to release prod."
+                ENVS=$(jq -nc --argjson e "$ENVS" '$e - ["prod"]')
+                break
+              fi
+            done
           fi
 
           # Deploy in tier order: test, staging, then prod.
@@ -273,10 +291,12 @@ jobs:
           ENVIRONMENT_UPPER=$(echo "$ENVIRONMENT" | tr '[:lower:]' '[:upper:]')
           echo "environment_upper=$ENVIRONMENT_UPPER" >> $GITHUB_OUTPUT
 
-      # Prod's real gate is the GitOps PR (plus any reviewers on the prod GitHub environment);
-      # a git tag is no longer required.
-      - name: Enforce prod deploy policy (main only)
+      # Prod requires every component to be built from main AND the build's own commit to carry a git
+      # tag. Applies to every trigger (auto, manual, tag push) -- a tag on some other commit doesn't count.
+      - name: Enforce prod deploy policy (main only, build commit must be tagged)
         if: matrix.environment == 'prod'
+        env:
+          GH_TOKEN: ${{ secrets.gh_actions_token }}
         run: |
           IFS=',' read -ra COMPONENTS <<< "${{ steps.components.outputs.components }}"
           for COMPONENT in "${COMPONENTS[@]}"; do
@@ -292,8 +312,24 @@ jobs:
               echo "❌ Deployment to prod is only allowed from main. Found: $BRANCH"
               exit 1
             fi
+
+            COMMIT=$(jq -r '.commit // empty' "$FILE")
+            if [[ ! "$COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "❌ Release metadata for $COMPONENT has no valid build commit (got: '$COMMIT')."
+              exit 1
+            fi
+
+            # The tags endpoint reports each tag's target commit (annotated tags dereferenced), so
+            # this matches lightweight and annotated tags alike.
+            TAGS=$(gh api --paginate "repos/${{ github.repository }}/tags?per_page=100" \
+                     --jq ".[] | select(.commit.sha == \"$COMMIT\") | .name" | paste -sd, -)
+            if [[ -z "$TAGS" ]]; then
+              echo "❌ Build commit $COMMIT ($COMPONENT) is not tagged. Production deployments require a git tag on the built commit."
+              exit 1
+            fi
+            echo "✅ $COMPONENT: build commit $COMMIT is tagged ($TAGS)."
           done
-          echo "✅ All components were built from main."
+          echo "✅ All components were built from main and their build commit is tagged."
 
       # Build once, tag many: if this build has no image for the target tier but already pushed the
       # same image to ECR under another tier (staging and prod share one repo), retag it instead of
